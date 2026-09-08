@@ -125,6 +125,34 @@ reported in `unresolved_glyphs` for a human to resolve, never moved.
 > someone could put that into a test case, I could fix this in the Glyphs3
 > branch."*
 
+### Master contours stored in a different order
+
+A glyph's contours are positional: nothing in the source says which contour of
+one master corresponds to which of another. Two masters holding the same
+contours in a different order therefore describe a glyph that cannot be
+interpolated, and ufo2ft fails the build with *"glyph 'one.tf' has incompatible
+masters"* — seen on a retail source whose proportional masters stored `(8, 4)`
+point counts and whose mono masters stored `(4, 8)`.
+
+`reorder_master_paths_to_variable_origin(font)` puts every master's contours in
+the origin's order. Reordering cannot change how a master renders — a glyph is
+filled from all its contours at once, and each keeps its own direction and
+points — only which contour pairs with which across masters.
+
+It acts **only when the pairing is unambiguous.** The correspondence is inferred
+from point counts, so a glyph whose counts contain a duplicate — a colon with
+two four-point dots, a dieresis, a quotation mark — offers no evidence about
+which contour belongs where. Guessing would silently pair the wrong contours and
+change what every intermediate instance draws, so those land in
+`ambiguous_glyphs` for a human instead. A build that fails is better than a font
+that interpolates through the wrong shape.
+
+> No upstream issue: unlike the other fixes here this is not a glyphsLib bug but
+> a source state, and the compatibility check that rejects it is correct to do
+> so. It is in this package because it is the same kind of repair — what the
+> editor recorded, not what the font looks like — and because the Builder and
+> the Customizer both need it.
+
 ### Duplicate designspace sources
 
 The last line of defence behind the brace layer alignment, for a designspace

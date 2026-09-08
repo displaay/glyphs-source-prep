@@ -51,13 +51,20 @@ from .designspace import (
     deduplicate_designspace_document,
     deduplicate_designspace_sources,
 )
+from .path_order import (
+    PathOrderResult,
+    layer_point_counts,
+    reorder_master_paths_to_variable_origin,
+    unambiguous_order,
+)
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "BackgroundCleanupResult",
     "BraceLayerAlignResult",
     "DeduplicateResult",
+    "PathOrderResult",
     "__version__",
     "align_brace_layers_to_variable_origin",
     "brace_coordinates",
@@ -67,5 +74,8 @@ __all__ = [
     "deduplicate_designspace_sources",
     "drop_dangling_background_components",
     "is_brace_layer",
+    "layer_point_counts",
+    "reorder_master_paths_to_variable_origin",
+    "unambiguous_order",
     "variable_font_origin_master_id",
 ]
