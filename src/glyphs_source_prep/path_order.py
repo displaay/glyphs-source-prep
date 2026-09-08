@@ -162,7 +162,8 @@ def reorder_master_paths_to_variable_origin(font: GSFont) -> PathOrderResult:
                 if sorted(current) == sorted(reference):
                     ambiguous = True
                 continue
-            layer.paths = [list(layer.paths)[index] for index in order]
+            paths = list(layer.paths)
+            layer.paths = [paths[index] for index in order]
             reordered_here += 1
 
         if reordered_here:
