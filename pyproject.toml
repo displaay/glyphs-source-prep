@@ -1,0 +1,83 @@
+[build-system]
+# hatchling >=1.27 for PEP 639 license expressions
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "glyphs-source-prep"
+# single source of truth: __version__ in src/glyphs_source_prep/__init__.py
+dynamic = ["version"]
+description = "Fix the things Glyphs.app tolerates in a .glyphs source and glyphsLib does not."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Displaay" }]
+keywords = ["fonts", "glyphs", "glyphsapp", "glyphslib", "fontmake", "designspace"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Fonts",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+# fontTools supplies the designspace document model. glyphsLib is deliberately
+# absent: the GSFont-based fixes duck-type what they touch and import glyphsLib
+# only under TYPE_CHECKING, so this package adds nothing to an environment that
+# already has one, and can be installed next to any glyphsLib version.
+dependencies = ["fonttools>=4.61,<5"]
+
+[project.optional-dependencies]
+# glyphsLib is needed to *build* the GSFont fixtures the tests run against.
+test = ["pytest>=7", "glyphsLib>=6.12,<7", "openstep-plist>=0.5,<1"]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "glyphsLib>=6.12,<7",
+    "openstep-plist>=0.5,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/displaay/glyphs-source-prep"
+Repository = "https://github.com/displaay/glyphs-source-prep"
+Issues = "https://github.com/displaay/glyphs-source-prep/issues"
+
+[tool.hatch.version]
+path = "src/glyphs_source_prep/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/glyphs_source_prep"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/glyphs_source_prep/py.typed" = "glyphs_source_prep/py.typed"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "N", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests build GSFont fixtures from plist literals and use short helpers; full
+# annotations add noise without value here.
+"tests/*" = ["ANN", "N"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["glyphs_source_prep"]
+strict = true
+
+[[tool.mypy.overrides]]
+# glyphsLib ships no type stubs.
+module = ["glyphsLib.*", "openstep_plist.*", "fontTools.*"]
+ignore_missing_imports = true

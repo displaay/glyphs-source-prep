@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        # The brace layer fix calls GSLayer._is_brace_layer(), which is private
+        # and whose implementation differs by format version, and the
+        # background fix uses the layer shapes proxy. Both are exactly the kind
+        # of thing that moves under a glyphsLib bump, so the matrix spans the
+        # supported range rather than pinning one version.
+        glyphslib: ["==6.12.*", "==6.13.*", "<7"]
+    name: py${{ matrix.python }} glyphsLib${{ matrix.glyphslib }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python }}"
+      - run: pip install -e ".[dev]" "glyphsLib${{ matrix.glyphslib }}"
+      - run: pytest -q
+
+  upstream-watch:
+    # Each fix here works around an open glyphsLib issue that the maintainers
+    # have agreed should be fixed upstream. This prints their current state so
+    # a closed one shows up in CI rather than being rediscovered years later.
+    # Informational only.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check the issues these fixes work around
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for issue in 743 925 995; do
+            gh issue view "$issue" --repo googlefonts/glyphsLib \
+              --json number,state,title \
+              --template '{{.number}} {{.state}} {{.title}}{{"\n"}}'
+          done
