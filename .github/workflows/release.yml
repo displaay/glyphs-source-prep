@@ -4,35 +4,43 @@ on:
   push:
     tags: ["v*"]
 
+# Deliberately NOT published to PyPI. Every fix in this package works around
+# an open glyphsLib issue its maintainers have agreed belongs upstream, so the
+# package is meant to shrink and eventually go - and a PyPI name cannot be
+# freed again once taken.
+# The wheel is attached to a GitHub Release instead, and consumers pin the
+# asset URL:
+#
+#   glyphs-source-prep @ https://github.com/displaay/glyphs-source-prep/releases/download/v0.1.0/glyphs_source_prep-0.1.0-py3-none-any.whl
+#
+# pip fetches a built wheel over plain HTTPS, so the build image needs no git
+# and the download caches like any other wheel. If this ever turns out to be
+# permanent, publishing to PyPI is still available later.
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Safety net: never publish a tag whose tests fail. The full matrix runs
+      # Safety net: never release a tag whose tests fail. The full matrix runs
       # in ci.yml on every push to main; this is a single-version smoke run.
       - run: pip install -e ".[test]"
       - run: pytest -q
+      - name: Check the tag matches the packaged version
+        run: |
+          version="$(python -c 'import glyphs_source_prep; print(glyphs_source_prep.__version__)')"
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match __version__ $version" >&2
+            exit 1
+          fi
       - run: pip install build
       - run: python -m build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    # Must match the environment name configured in the PyPI trusted publisher.
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish the wheel as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes

@@ -13,8 +13,16 @@ look like.
 
 ## Installation
 
+Not on PyPI on purpose: this package is meant to be deleted once upstream catches up, and a PyPI name cannot be freed again once taken. Releases are wheels attached to a GitHub Release, so pin the asset URL:
+
+```
+glyphs-source-prep @ https://github.com/displaay/glyphs-source-prep/releases/download/v0.1.0/glyphs_source_prep-0.1.0-py3-none-any.whl
+```
+
+pip fetches a built wheel over plain HTTPS - no git needed in the build image, and it caches like any other wheel. For local work:
+
 ```bash
-pip install glyphs-source-prep
+pip install -e .
 ```
 
 `glyphsLib` is deliberately **not** a runtime dependency: the `GSFont`-based
