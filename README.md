@@ -97,9 +97,27 @@ Georg Seifert, in
 > A brace layer is what is called a sparse master in ufo/designspace. So no
 > connection to the master it is attached to. It just has to be somewhere.
 
-`align_brace_layers_to_variable_origin(font)` does what Glyphs users do by
-hand: reassign every brace layer to the variable font origin master. No
-outlines change — only which master a sparse source is nominally hung off.
+`align_brace_layers_to_variable_origin(font)` reassigns the layers that are
+actually in conflict to the variable font origin master.
+
+**Only the ones in conflict.** A source whose brace layers are spread across
+several masters is perfectly healthy as long as each *location* belongs to one
+master. Measured across eight retail families, six had brace layers on several
+masters and none had a conflicting location — reassigning them all, as a
+Glyphs user does by hand, would have rewritten up to a hundred layers per
+family for nothing. Pass `only_conflicts=False` for that behaviour.
+
+**And "the same location" is not the coordinates in the layer name.**
+glyphsLib fills a short coordinate list up from the associated master, so on a
+wght/wdth font a `{80}` layer on a Width 100 master and a `{80}` layer on a
+Width 50 master are two *different* sources, while `{80, 100}` on one master
+collides with `{80}` on a master whose Width is 100. Comparing raw
+coordinates gets both cases wrong.
+
+That padding also limits the repair: for a layer whose coordinates are short,
+the associated master is what supplies the rest of the location, so moving it
+would shift the sparse master and change what the font interpolates. Those are
+reported in `unresolved_glyphs` for a human to resolve, never moved.
 
 > Upstream: [glyphsLib#995](https://github.com/googlefonts/glyphsLib/issues/995),
 > open since 2024. *"ideally we should [ignore the putative master for an

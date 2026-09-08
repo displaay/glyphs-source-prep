@@ -40,6 +40,9 @@ from .backgrounds import (
 from .brace_layers import (
     BraceLayerAlignResult,
     align_brace_layers_to_variable_origin,
+    brace_coordinates,
+    conflicting_locations,
+    effective_location,
     is_brace_layer,
     variable_font_origin_master_id,
 )
@@ -49,7 +52,7 @@ from .designspace import (
     deduplicate_designspace_sources,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BackgroundCleanupResult",
@@ -57,6 +60,9 @@ __all__ = [
     "DeduplicateResult",
     "__version__",
     "align_brace_layers_to_variable_origin",
+    "brace_coordinates",
+    "conflicting_locations",
+    "effective_location",
     "deduplicate_designspace_document",
     "deduplicate_designspace_sources",
     "drop_dangling_background_components",

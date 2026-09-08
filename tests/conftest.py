@@ -13,19 +13,21 @@ import pytest
 PATH = {"closed": 1, "nodes": [[100, 200, "l"], [300, 400, "l"], [300, 200, "l"]]}
 
 
-def make_font(glyphs, masters=None, custom_parameters=None):
+def make_font(glyphs, masters=None, custom_parameters=None, axes=None):
     """Build a GSFont from a compact description.
 
     :param glyphs: ``{glyph name: [layer dict, ...]}``.
     :param masters: ``[(id, name, axes values), ...]``; one master by default.
+    :param axes: The font axes; a single wght axis by default.
     :param custom_parameters: ``[{"name": ..., "value": ...}, ...]``.
     """
     masters = masters or [("m01", "Regular", [100])]
+    axes = axes or [{"tag": "wght", "name": "Weight"}]
     source = {
         ".appVersion": "3300",
         ".formatVersion": 3,
         "familyName": "Test",
-        "axes": [{"tag": "wght", "name": "Weight"}],
+        "axes": axes,
         "fontMaster": [
             {"id": master_id, "name": name, "axesValues": values}
             for (master_id, name, values) in masters
@@ -62,3 +64,15 @@ def brace_layer(associated_master_id, coordinates, shapes=None):
 @pytest.fixture
 def two_masters():
     return [("m01", "Light", [50]), ("m02", "Bold", [150])]
+
+
+#: A wght/wdth font, for the cases where a brace layer's coordinates are
+#: shorter than the axis count and glyphsLib fills the rest in from the
+#: associated master.
+TWO_AXES = [{"tag": "wght", "name": "Weight"}, {"tag": "wdth", "name": "Width"}]
+
+
+@pytest.fixture
+def two_axis_masters():
+    """Two masters that differ on BOTH axes, so padding is observable."""
+    return [("m01", "Light", [50, 100]), ("m02", "Bold", [150, 50])]
