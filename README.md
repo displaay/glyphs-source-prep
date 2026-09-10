@@ -33,13 +33,16 @@ next to any glyphsLib version.
 ## Usage
 
 ```python
-import glyphsLib
 from glyphs_source_prep import (
     align_brace_layers_to_variable_origin,
     drop_dangling_background_components,
+    load_source,
 )
 
-font = glyphsLib.load("Font.glyphs")
+result = load_source(Path("Font.glyphs").read_bytes())
+for line in result.summary_lines():
+    log.info(line)
+font = result.font
 
 report = drop_dangling_background_components(font)
 if report.dropped:
@@ -53,6 +56,28 @@ if report.moved:
 ```
 
 and after the designspace has been generated:
+
+```python
+from glyphs_source_prep import (
+    deduplicate_designspace_document,
+    ensure_default_master_document,
+    inherit_empty_master_kerning_document,
+    repair_collapsing_axis_maps_document,
+)
+
+for repair in (
+    deduplicate_designspace_document,
+    ensure_default_master_document,
+    repair_collapsing_axis_maps_document,
+    inherit_empty_master_kerning_document,
+):
+    report = repair(designspace)
+```
+
+Each designspace repair comes in two forms. The `_document` one takes a
+`DesignSpaceDocument` and edits it in place, for a caller that built the
+document in memory and never writes it out; the one named after the file takes
+a path and rewrites it, for a caller handing it to fontmake:
 
 ```python
 from glyphs_source_prep import deduplicate_designspace_sources
@@ -165,6 +190,81 @@ rewritten only when something was actually removed.
 
 > Upstream: [glyphsLib#925](https://github.com/googlefonts/glyphsLib/issues/925)
 > fixed the layer-naming half of this in 6.2.4/6.2.5. What remains is #995.
+
+### No master at the axis default
+
+glyphsLib emits a collapsed axis map when only a sparse set of instances export
+and those instances use Axis Location remapping. `axis.default` then maps to a
+design location no master sits at, and ufo2ft's Instantiator fails because it
+has no base to interpolate from.
+
+`ensure_default_master_document(designspace)` expands each map with identity
+entries for the master design locations that are unreachable through it, and
+rebases each axis default onto a real master — the one flagged as carrying the
+family-wide info, which is the master Glyphs itself treats as the reference.
+
+A sparse (brace) layer source cannot serve as the base either: its UFO layer
+holds only the glyphs that differ at that location, so interpolating from it
+would drop every glyph that does not. And nothing is changed unless a master
+can actually be found to rebase onto — inventing a default where there is no
+master would only move the failure somewhere less informative.
+
+### An axis map that collapses an endpoint onto the default
+
+A map like wdth `(50→50), (75→50), (100→100)` puts the axis minimum and the
+axis default at the same design coordinate. varLib normalizes design
+locations and needs the minimum at −1, the default at 0 and the maximum at
++1; here −1 and 0 are the same place, and `fontTools.varLib._add_avar` asserts.
+
+`repair_collapsing_axis_maps_document(designspace)` moves the *user* default
+onto the endpoint it collapsed against and drops the now-redundant remap
+entry. Every master stays where it was — only the label on the default
+location changes.
+
+### A mono master with no kerning
+
+A Glyphs source usually holds one set of kerning pairs, drawn on the
+proportional masters, and leaves the mono masters empty: in the editor the mono
+design does not need it, because every glyph is the same width. What that means
+for a build is less obvious — the mono masters interpolate to *no* kerning, so
+a static Mono instance compiles with an empty GPOS and a variable font's
+kerning fades out towards the mono end of the axis. Glyphs.app never shows
+this, because it does not interpolate kerning the way varLib does.
+
+`inherit_empty_master_kerning_document(designspace)` gives an empty master the
+pairs of the sibling that matches it on every axis except the mono one,
+preferring the sibling at MONO 0 — the proportional design the mono one was
+drawn from.
+
+Only a master with *no* pairs at all is touched: a master with some kerning is
+a design decision, and topping it up would be guessing at which pairs the
+designer meant to leave out. A master with no pairs and no sibling to take them
+from is named in `without_donor` rather than repaired.
+
+> No upstream issue: the source is not wrong, and neither is glyphsLib. The
+> assumption that a mono master shares the proportional master's kerning is a
+> Displaay drawing convention, which is why it lives in a package of ours.
+
+### A Glyphs 4 source, or one that is not valid UTF-8
+
+Two things stand between the bytes on disk and a font object glyphsLib will
+work with, and they have to happen in this order: decode the file, then convert
+a format 4 source down to format 3. `load_source` does both.
+
+```python
+from glyphs_source_prep import load_source
+
+result = load_source(path.read_bytes(), origin=path)
+for line in result.summary_lines():
+    log.info(line)
+font = result.font
+```
+
+The conversion itself is [glyphs4to3](https://github.com/displaay/glyphs4to3),
+an optional dependency imported when the function runs — install
+`glyphs-source-prep[sources]` for it. What stays with each caller is what
+genuinely differs: staging a converted copy on disk for fontmake to read, or
+translating the conversion error into an application's own validation error.
 
 ### A source that is not valid UTF-8
 

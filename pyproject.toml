@@ -31,8 +31,22 @@ classifiers = [
 dependencies = ["fonttools>=4.61,<5"]
 
 [project.optional-dependencies]
-# glyphsLib is needed to *build* the GSFont fixtures the tests run against.
-test = ["pytest>=7", "glyphsLib>=6.12,<7", "openstep-plist>=0.5,<1"]
+# load_source() converts a Glyphs 4 source on the way in; nothing else here
+# needs it, and it is imported when the function runs so the rest of the
+# package installs without it.
+sources = [
+    "glyphs4to3 @ https://github.com/displaay/glyphs4to3/releases/download/v0.3.1/glyphs4to3-0.3.1-py3-none-any.whl",
+]
+# glyphsLib is needed to *build* the GSFont fixtures the tests run against,
+# ufoLib2 for the kerning ones, and glyphs4to3 so the load_source tests run
+# rather than skip.
+test = [
+    "pytest>=7",
+    "glyphsLib>=6.12,<7",
+    "openstep-plist>=0.5,<1",
+    "ufoLib2>=0.16",
+    "glyphs4to3 @ https://github.com/displaay/glyphs4to3/releases/download/v0.3.1/glyphs4to3-0.3.1-py3-none-any.whl",
+]
 dev = [
     "pytest>=7",
     "pytest-cov",
@@ -40,6 +54,8 @@ dev = [
     "mypy",
     "glyphsLib>=6.12,<7",
     "openstep-plist>=0.5,<1",
+    "ufoLib2>=0.16",
+    "glyphs4to3 @ https://github.com/displaay/glyphs4to3/releases/download/v0.3.1/glyphs4to3-0.3.1-py3-none-any.whl",
 ]
 
 [project.urls]

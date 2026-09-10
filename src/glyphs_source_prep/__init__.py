@@ -50,14 +50,30 @@ from .brace_layers import (
     variable_font_origin_master_id,
 )
 from .designspace import (
+    AxisMapResult,
     DeduplicateResult,
+    DefaultMasterResult,
     deduplicate_designspace_document,
     deduplicate_designspace_sources,
+    ensure_default_master_document,
+    ensure_designspace_default_master,
+    master_sources,
+    repair_collapsing_axis_maps,
+    repair_collapsing_axis_maps_document,
+)
+from .kerning import (
+    KerningInheritResult,
+    inherit_empty_master_kerning,
+    inherit_empty_master_kerning_document,
 )
 from .encoding import (
     SourceDecodeResult,
     decode_source_bytes,
     decode_source_text,
+)
+from .sources import (
+    SourceLoadResult,
+    load_source,
 )
 from .path_order import (
     PathOrderResult,
@@ -66,14 +82,18 @@ from .path_order import (
     unambiguous_order,
 )
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 __all__ = [
     "BackgroundCleanupResult",
     "BraceLayerAlignResult",
+    "AxisMapResult",
     "DeduplicateResult",
+    "DefaultMasterResult",
+    "KerningInheritResult",
     "PathOrderResult",
     "SourceDecodeResult",
+    "SourceLoadResult",
     "__version__",
     "align_brace_layers_to_variable_origin",
     "brace_coordinates",
@@ -83,10 +103,18 @@ __all__ = [
     "decode_source_text",
     "deduplicate_designspace_document",
     "deduplicate_designspace_sources",
+    "ensure_default_master_document",
+    "ensure_designspace_default_master",
     "drop_dangling_background_components",
     "is_brace_layer",
+    "inherit_empty_master_kerning",
+    "inherit_empty_master_kerning_document",
     "layer_point_counts",
+    "load_source",
+    "master_sources",
     "reorder_master_paths_to_variable_origin",
+    "repair_collapsing_axis_maps",
+    "repair_collapsing_axis_maps_document",
     "unambiguous_order",
     "variable_font_origin_master_id",
 ]
