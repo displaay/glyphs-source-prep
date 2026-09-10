@@ -166,12 +166,41 @@ rewritten only when something was actually removed.
 > Upstream: [glyphsLib#925](https://github.com/googlefonts/glyphsLib/issues/925)
 > fixed the layer-naming half of this in 6.2.4/6.2.5. What remains is #995.
 
+### A source that is not valid UTF-8
+
+Glyphs.app has written UTF-8 for years, but a source that started life in an
+older version keeps whatever single bytes were typed into it then — a
+designer's name, a copyright line — as MacRoman. The editor still opens it; it
+falls back per byte. Python does not, and `data.decode("utf-8")` raises before
+glyphsLib is ever reached, pointing at a byte offset rather than a string.
+
+```python
+from glyphs_source_prep import decode_source_text
+
+result = decode_source_text(raw)        # bytes, or an already-decoded str
+if result.rewritten:
+    log.warning(result.summary())
+font = GSFont(result.text)
+```
+
+Files like this are almost always *mixed*: mostly UTF-8, with a few legacy
+bytes in the middle. Decoding the whole file as MacRoman would therefore be
+wrong — every genuine multi-byte character would become mojibake — so this
+decodes as UTF-8 as far as it can, takes the one offending byte as MacRoman,
+and resumes.
+
+> Not a glyphsLib bug and no upstream issue: by the time glyphsLib sees a
+> source it is already `str`. It lives here because it is the same class of
+> problem one step earlier, and both tools need it at the same point.
+
 ## When to delete each fix
 
 Every module names the upstream issue it works around and what would close it.
 These are all bugs the maintainers have agreed should be fixed in glyphsLib —
 none is a permanent difference of opinion — so check the issues before assuming
-a fix is still needed, and drop the ones that have landed.
+a fix is still needed, and drop the ones that have landed. The exception is
+`encoding`, which works around no bug: it stays as long as sources written by
+older Glyphs versions do.
 
 The tests are the useful part to keep either way: they are small, they assert
 the *behaviour* rather than the workaround, and they double as the reproduction
