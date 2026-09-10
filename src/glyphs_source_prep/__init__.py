@@ -61,26 +61,26 @@ from .designspace import (
     repair_collapsing_axis_maps,
     repair_collapsing_axis_maps_document,
 )
-from .kerning import (
-    KerningInheritResult,
-    is_mono_axis,
-    inherit_empty_master_kerning,
-    inherit_empty_master_kerning_document,
-)
 from .encoding import (
     SourceDecodeResult,
     decode_source_bytes,
     decode_source_text,
 )
-from .sources import (
-    SourceLoadResult,
-    load_source,
+from .kerning import (
+    KerningInheritResult,
+    inherit_empty_master_kerning,
+    inherit_empty_master_kerning_document,
+    is_mono_axis,
 )
 from .path_order import (
     PathOrderResult,
     layer_point_counts,
     reorder_master_paths_to_variable_origin,
     unambiguous_order,
+)
+from .sources import (
+    SourceLoadResult,
+    load_source,
 )
 
 __version__ = "0.5.0"

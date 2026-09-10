@@ -39,7 +39,7 @@ def make_source(name, location, kerning=None, *, layer=None):
 
 def make_doc(sources, axis_names=("Weight", "MONO")):
     doc = DesignSpaceDocument()
-    for index, name in enumerate(axis_names):
+    for name in axis_names:
         axis = AxisDescriptor()
         axis.name = name
         axis.tag = "wght" if name == "Weight" else "MONO"

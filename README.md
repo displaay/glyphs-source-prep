@@ -175,8 +175,8 @@ that interpolates through the wrong shape.
 > No upstream issue: unlike the other fixes here this is not a glyphsLib bug but
 > a source state, and the compatibility check that rejects it is correct to do
 > so. It is in this package because it is the same kind of repair — what the
-> editor recorded, not what the font looks like — and because the Builder and
-> the Customizer both need it.
+> editor recorded, not what the font looks like — and because more than one
+> tool in a pipeline hits it.
 
 ### Duplicate designspace sources
 
@@ -243,7 +243,8 @@ from is named in `without_donor` rather than repaired.
 
 > No upstream issue: the source is not wrong, and neither is glyphsLib. The
 > assumption that a mono master shares the proportional master's kerning is a
-> Displaay drawing convention, which is why it lives in a package of ours.
+> drawing convention, not a rule — which is why it is opt-in here rather than
+> something glyphsLib should do for everyone.
 
 ### A Glyphs 4 source, or one that is not valid UTF-8
 

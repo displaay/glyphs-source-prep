@@ -38,7 +38,11 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from fontTools.designspaceLib import DesignSpaceDocument, SourceDescriptor
+from fontTools.designspaceLib import (
+    AxisDescriptor,
+    DesignSpaceDocument,
+    SourceDescriptor,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -221,12 +225,17 @@ def _user_loc_for_design(mapping: dict[float, float], design_val: float) -> floa
     return None
 
 
-def _axis_state(axis) -> tuple[list[tuple[float, float]], float, float, float]:
+#: What :func:`_axis_state` snapshots: the map, and the three bounds a
+#: rebase moves. Named because two signatures spell it.
+AxisState = tuple[list[tuple[float, float]], float, float, float]
+
+
+def _axis_state(axis: AxisDescriptor) -> AxisState:
     """What :func:`ensure_default_master_document` may change about an axis."""
     return (list(axis.map or []), axis.minimum, axis.maximum, axis.default)
 
 
-def _restore_axis(axis, state) -> None:
+def _restore_axis(axis: AxisDescriptor, state: AxisState) -> None:
     """Put an axis back the way :func:`_axis_state` found it."""
     (axis.map, axis.minimum, axis.maximum, axis.default) = state
 
@@ -340,7 +349,7 @@ def ensure_default_master_document(
         # location and findDefault() then matches it. It is kept because the
         # cost is a list of four-tuples and the alternative is a half-rebased
         # design space that the result object says nothing about.
-        for axis, state in zip(designspace.axes, before):
+        for axis, state in zip(designspace.axes, before, strict=True):
             _restore_axis(axis, state)
         return DefaultMasterResult()
 
@@ -368,7 +377,7 @@ def ensure_designspace_default_master(
     return result
 
 
-def _axis_map_pairs(axis) -> list[tuple[float, float]]:
+def _axis_map_pairs(axis: AxisDescriptor) -> list[tuple[float, float]]:
     return [(float(user), float(design)) for (user, design) in (axis.map or [])]
 
 
