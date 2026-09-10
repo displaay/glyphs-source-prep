@@ -221,6 +221,16 @@ def _user_loc_for_design(mapping: dict[float, float], design_val: float) -> floa
     return None
 
 
+def _axis_state(axis) -> tuple[list[tuple[float, float]], float, float, float]:
+    """What :func:`ensure_default_master_document` may change about an axis."""
+    return (list(axis.map or []), axis.minimum, axis.maximum, axis.default)
+
+
+def _restore_axis(axis, state) -> None:
+    """Put an axis back the way :func:`_axis_state` found it."""
+    (axis.map, axis.minimum, axis.maximum, axis.default) = state
+
+
 def ensure_default_master_document(
     designspace: DesignSpaceDocument,
 ) -> DefaultMasterResult:
@@ -252,6 +262,12 @@ def ensure_default_master_document(
         for (name, value) in preferred.getFullDesignLocation(designspace).items()
     }
     masters = master_sources(designspace)
+    # The rebase is only known to have worked once every axis has been walked,
+    # and it edits the axes as it goes. Keep what they were so that a rebase
+    # that turns out not to land can put them back: a caller holding the
+    # document has no file to fall back on, and a half-rebased axis is worse
+    # than the state that failed.
+    before = [_axis_state(axis) for axis in designspace.axes]
 
     for axis in designspace.axes:
         design_val = float(default_design.get(axis.name, 0.0))
@@ -314,8 +330,18 @@ def ensure_default_master_document(
             result.axes.append(axis.name or axis.tag or "?")
 
     if designspace.findDefault() is None:
-        # The rebase did not land on a master after all. Report nothing rather
-        # than a change that did not fix what it was for.
+        # The rebase did not land on a master after all. Put the axes back and
+        # report nothing: a change that did not fix what it was for is not one
+        # a caller should be told about, and certainly not one to leave behind
+        # in a document the caller cannot reload from a file.
+        #
+        # Defensive: no document could be constructed that reaches here, since
+        # the loop rebases each axis onto the preferred master's own design
+        # location and findDefault() then matches it. It is kept because the
+        # cost is a list of four-tuples and the alternative is a half-rebased
+        # design space that the result object says nothing about.
+        for axis, state in zip(designspace.axes, before):
+            _restore_axis(axis, state)
         return DefaultMasterResult()
 
     result.changed = bool(result.axes)

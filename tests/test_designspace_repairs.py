@@ -162,6 +162,39 @@ class TestEnsureDefaultMaster:
         assert result.changed
         assert DesignSpaceDocument.fromfile(str(path)).axes[0].default == 100
 
+    def test_a_document_with_no_full_master_is_left_untouched(self):
+        # Only layer sources: there is nothing to rebase onto, so the axes must
+        # come out exactly as they went in. A caller holding the document has
+        # no file to reload from, and a half-rebased design space is worse than
+        # the state that failed the build.
+        #
+        # This covers the early return. The rollback further down, for a rebase
+        # that runs and then does not land, is defensive - no document could be
+        # constructed that reaches it.
+        doc = make_doc(
+            [make_axis(mapping=[(100, 100), (900, 900)])],
+            [
+                make_source("Brace A", {"Weight": 100}, layer="{100}"),
+                make_source("Brace B", {"Weight": 900}, layer="{900}"),
+            ],
+        )
+        doc.axes[0].default = 200
+        before = (
+            list(doc.axes[0].map),
+            doc.axes[0].minimum,
+            doc.axes[0].maximum,
+            doc.axes[0].default,
+        )
+        result = ensure_default_master_document(doc)
+        assert not result.changed
+        assert result.axes == []
+        assert (
+            list(doc.axes[0].map),
+            doc.axes[0].minimum,
+            doc.axes[0].maximum,
+            doc.axes[0].default,
+        ) == before
+
 
 class TestRepairCollapsingAxisMaps:
     def test_a_map_that_collapses_the_minimum_onto_the_default(self):
