@@ -63,6 +63,14 @@ Homepage = "https://github.com/displaay/glyphs-source-prep"
 Repository = "https://github.com/displaay/glyphs-source-prep"
 Issues = "https://github.com/displaay/glyphs-source-prep/issues"
 
+[tool.hatch.metadata]
+# The extras below pin glyphs4to3 by its GitHub Release URL, the same way the
+# two applications pin this package: it is a Displaay wheel and there is no
+# index to resolve it from. Hatchling refuses a direct reference in metadata
+# unless this says so, and refuses it at *build* time -- so without this the
+# wheel cannot be produced at all.
+allow-direct-references = true
+
 [tool.hatch.version]
 path = "src/glyphs_source_prep/__init__.py"
 
