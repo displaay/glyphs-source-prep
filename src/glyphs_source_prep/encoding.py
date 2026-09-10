@@ -25,7 +25,7 @@ tools need it at the same point, before the source is parsed.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,11 +40,7 @@ class SourceDecodeResult:
     text: str = ""
     rewritten: bool = False
     legacy_bytes: int = 0
-    characters: list[str] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.characters is None:
-            self.characters = []
+    characters: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         """A single line for a processing log."""

@@ -44,7 +44,7 @@ class TestLegacyBytes:
     def test_utf8_around_a_legacy_byte_survives(self):
         # the whole point: decoding the file as MacRoman would turn every
         # genuine multi-byte character into mojibake
-        data = "Tomáš ".encode("utf-8") + b"\xa9" + " Ňuňátko".encode("utf-8")
+        data = "Tomáš ".encode() + b"\xa9" + " Ňuňátko".encode()
         result = decode_source_bytes(data)
         assert result.text == "Tomáš © Ňuňátko"
         assert result.rewritten is True

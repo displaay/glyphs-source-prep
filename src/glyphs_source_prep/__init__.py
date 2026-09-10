@@ -49,15 +49,15 @@ from .brace_layers import (
     is_brace_layer,
     variable_font_origin_master_id,
 )
-from .encoding import (
-    SourceDecodeResult,
-    decode_source_bytes,
-    decode_source_text,
-)
 from .designspace import (
     DeduplicateResult,
     deduplicate_designspace_document,
     deduplicate_designspace_sources,
+)
+from .encoding import (
+    SourceDecodeResult,
+    decode_source_bytes,
+    decode_source_text,
 )
 from .path_order import (
     PathOrderResult,
