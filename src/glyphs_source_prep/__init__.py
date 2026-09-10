@@ -63,6 +63,7 @@ from .designspace import (
 )
 from .kerning import (
     KerningInheritResult,
+    is_mono_axis,
     inherit_empty_master_kerning,
     inherit_empty_master_kerning_document,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "drop_dangling_background_components",
     "is_brace_layer",
     "inherit_empty_master_kerning",
+    "is_mono_axis",
     "inherit_empty_master_kerning_document",
     "layer_point_counts",
     "load_source",

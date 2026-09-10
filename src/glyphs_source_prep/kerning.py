@@ -16,9 +16,9 @@ Only a master with *no* pairs at all is touched. A master with some kerning is
 a design decision, and topping it up would be guessing at which pairs the
 designer meant to leave out.
 
-The axis is recognised by name: Glyphs sources spell it ``MONO``, whatever the
-tag. There is no flag in the format that marks an axis as the one whose ends
-share a kerning set.
+The axis is recognised by its tag or its name: Glyphs sources spell it
+``MONO`` either way. There is no flag in the format that marks an axis as the
+one whose ends share a kerning set.
 """
 
 from __future__ import annotations
@@ -78,9 +78,15 @@ class KerningInheritResult:
         return "; ".join(parts)
 
 
-def is_mono_axis_name(name: str) -> bool:
-    """Whether an axis name is the mono axis, the one kerning is shared across."""
-    return (name or "").upper() == "MONO"
+def is_mono_axis(tag_or_name: str) -> bool:
+    """Whether an axis tag or name is the mono axis.
+
+    Both, because the same question is asked of a designspace, whose locations
+    are keyed by axis *name*, and of an ``fvar`` table, whose axes are keyed by
+    *tag*. Glyphs sources spell it ``MONO`` either way, and there is no flag in
+    the format that marks an axis as the one whose ends share a kerning set.
+    """
+    return (tag_or_name or "").strip().upper() == "MONO"
 
 
 def _locations_match_except(
@@ -132,7 +138,7 @@ def inherit_empty_master_kerning_document(
         axis_name
         for source in masters
         for axis_name in (source.location or {})
-        if is_mono_axis_name(axis_name)
+        if is_mono_axis(axis_name)
     }
     if not mono_axes:
         # Without a mono axis there is no pair of masters that share a design
@@ -212,5 +218,5 @@ __all__ = [
     "KerningInheritResult",
     "inherit_empty_master_kerning",
     "inherit_empty_master_kerning_document",
-    "is_mono_axis_name",
+    "is_mono_axis",
 ]

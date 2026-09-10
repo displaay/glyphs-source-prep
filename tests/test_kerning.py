@@ -12,8 +12,8 @@ from fontTools.designspaceLib import (
 from glyphs_source_prep import (
     inherit_empty_master_kerning,
     inherit_empty_master_kerning_document,
+    is_mono_axis,
 )
-from glyphs_source_prep.kerning import is_mono_axis_name
 
 ufoLib2 = pytest.importorskip("ufoLib2")
 
@@ -52,14 +52,15 @@ def make_doc(sources, axis_names=("Weight", "MONO")):
     return doc
 
 
-class TestIsMonoAxisName:
-    @pytest.mark.parametrize("name", ["MONO", "mono", "Mono"])
+class TestIsMonoAxis:
+    @pytest.mark.parametrize("name", ["MONO", "mono", "Mono", " MONO "])
     def test_the_mono_axis_is_recognised_whatever_its_case(self, name):
-        assert is_mono_axis_name(name)
+        # Asked of a designspace it is an axis name, of an fvar table a tag.
+        assert is_mono_axis(name)
 
-    @pytest.mark.parametrize("name", ["Weight", "Width", "", None])
+    @pytest.mark.parametrize("name", ["Weight", "Width", "wght", "", None])
     def test_nothing_else_is(self, name):
-        assert not is_mono_axis_name(name)
+        assert not is_mono_axis(name)
 
 
 class TestInheritDocument:
