@@ -764,7 +764,8 @@ def extend_axis_maps_document(
 
         needed_designs: list[float] = []
         for source in masters:
-            design_val = float((source.location or {}).get(axis.name, 0.0))
+            full_design = source.getFullDesignLocation(designspace)
+            design_val = float(full_design[axis.name])
             if any(abs(design_val - existing) < EPSILON for existing in design_outputs):
                 continue
             needed_designs.append(design_val)
@@ -817,8 +818,14 @@ def extend_axis_maps_document(
                 result.extrapolated.append(axis_name)
 
         new_map = sorted(proposed.items())
-        new_minimum = min(proposed)
-        new_maximum = max(proposed)
+        map_minimum = min(proposed)
+        map_maximum = max(proposed)
+        new_minimum = map_minimum
+        new_maximum = map_maximum
+        if axis.minimum is not None:
+            new_minimum = min(float(axis.minimum), map_minimum)
+        if axis.maximum is not None:
+            new_maximum = max(float(axis.maximum), map_maximum)
         axis.map = new_map
         axis.minimum = new_minimum
         axis.maximum = new_maximum

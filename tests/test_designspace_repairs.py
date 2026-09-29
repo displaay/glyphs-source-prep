@@ -424,3 +424,50 @@ class TestExtendAxisMapsToMasters:
         assert result.skipped == ["Width"]
         assert list(doc.axes[0].map) == before_map
         assert "monotonicity" in result.summary()
+
+    def test_omitted_axis_dimension_uses_the_axis_default(self):
+        weight = make_axis(name="Weight", tag="wght", minimum=100, default=400, maximum=900)
+        width = make_axis(
+            name="Width",
+            tag="wdth",
+            minimum=75,
+            default=75,
+            maximum=100,
+            mapping=[(75, 75), (87.5, 89), (100, 100)],
+        )
+        doc = make_doc(
+            [weight, width],
+            [
+                make_source("Condensed", {"Weight": 400}),
+                make_source("Extended", {"Weight": 400, "Width": 130}),
+            ],
+        )
+        font = _Font([_Instance(130, 7)])
+        result = extend_axis_maps_document(doc, font)
+        assert result.axes == ["Width"]
+        assert result.points == [("Width", 125.0, 130.0)]
+        assert (0.0, 0.0) not in width.map
+
+    def test_declared_bounds_outside_map_keys_are_preserved(self):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=50,
+                    default=75,
+                    maximum=125,
+                    mapping=[(75, 75), (87.5, 89), (100, 100)],
+                )
+            ],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        font = _Font([_Instance(130, 7)])
+        result = extend_axis_maps_document(doc, font)
+        width = doc.axes[0]
+        assert result.axes == ["Width"]
+        assert float(width.minimum) == 50.0
+        assert float(width.maximum) == 125.0
