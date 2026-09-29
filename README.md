@@ -61,12 +61,14 @@ and after the designspace has been generated:
 from glyphs_source_prep import (
     deduplicate_designspace_document,
     ensure_default_master_document,
+    extend_axis_maps_document,
     inherit_empty_master_kerning_document,
     repair_collapsing_axis_maps_document,
 )
 
 for repair in (
     deduplicate_designspace_document,
+    extend_axis_maps_document,
     ensure_default_master_document,
     repair_collapsing_axis_maps_document,
     inherit_empty_master_kerning_document,
@@ -190,6 +192,22 @@ rewritten only when something was actually removed.
 
 > Upstream: [glyphsLib#925](https://github.com/googlefonts/glyphsLib/issues/925)
 > fixed the layer-naming half of this in 6.2.4/6.2.5. What remains is #995.
+
+### An axis map that stops short of a master
+
+glyphsLib builds a non-identity axis map only from instances switched on for
+export. When wide or extended instances are off, the map stops before their
+masters and varLib's `splitInterpolable` drops those masters — a static
+"Standard" can end up as wide as Condensed, and the variable font's width axis
+has no effect past the truncated map.
+
+`extend_axis_maps_to_masters(path, font)` extends each map so every full
+master's design location is covered, taking user locations from inactive
+instances (and Axis Location / weight-width class fallbacks) before
+extrapolating. Call it **after** any inverted-map repair in your pipeline and
+**before** `ensure_default_master_document`: the default-master repair fills an
+unreachable master with an identity point, and an inactive instance's user
+location would conflict if extend ran after it.
 
 ### No master at the axis default
 

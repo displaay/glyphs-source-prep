@@ -51,12 +51,15 @@ from .brace_layers import (
 )
 from .designspace import (
     AxisMapResult,
+    AxisRangeResult,
     DeduplicateResult,
     DefaultMasterResult,
     deduplicate_designspace_document,
     deduplicate_designspace_sources,
     ensure_default_master_document,
     ensure_designspace_default_master,
+    extend_axis_maps_document,
+    extend_axis_maps_to_masters,
     master_sources,
     repair_collapsing_axis_maps,
     repair_collapsing_axis_maps_document,
@@ -83,12 +86,13 @@ from .sources import (
     load_source,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "BackgroundCleanupResult",
     "BraceLayerAlignResult",
     "AxisMapResult",
+    "AxisRangeResult",
     "DeduplicateResult",
     "DefaultMasterResult",
     "KerningInheritResult",
@@ -106,6 +110,8 @@ __all__ = [
     "deduplicate_designspace_sources",
     "ensure_default_master_document",
     "ensure_designspace_default_master",
+    "extend_axis_maps_document",
+    "extend_axis_maps_to_masters",
     "drop_dangling_background_components",
     "is_brace_layer",
     "inherit_empty_master_kerning",

@@ -11,6 +11,8 @@ from fontTools.designspaceLib import (
 from glyphs_source_prep import (
     ensure_default_master_document,
     ensure_designspace_default_master,
+    extend_axis_maps_document,
+    extend_axis_maps_to_masters,
     master_sources,
     repair_collapsing_axis_maps,
     repair_collapsing_axis_maps_document,
@@ -261,3 +263,164 @@ class TestRepairCollapsingAxisMaps:
         before = path.read_bytes()
         assert repair_collapsing_axis_maps(path).axes == []
         assert path.read_bytes() == before
+
+
+class _Params(dict):
+    def __missing__(self, key):
+        return None
+
+
+class _Axis:
+    def __init__(self, name: str, tag: str) -> None:
+        self.name = name
+        self.axisTag = tag
+
+
+class _Instance:
+    def __init__(
+        self,
+        design: float,
+        width_class: int | None = None,
+        *,
+        axis_location: float | None = None,
+    ) -> None:
+        self.axes = [design]
+        self.width = width_class
+        self.exports = False
+        self.active = False
+        params = _Params()
+        if axis_location is not None:
+            params["Axis Location"] = [{"Axis": "Width", "Location": axis_location}]
+        self.customParameters = params
+
+    def _get_axis_value(self, index: int) -> float:
+        return float(self.axes[index])
+
+
+class _Font:
+    def __init__(self, instances) -> None:
+        self.axes = [_Axis("Width", "wdth")]
+        self.instances = instances
+        self.customParameters = _Params()
+
+
+class TestExtendAxisMapsToMasters:
+    def test_truncated_width_map_uses_inactive_instances(self):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=75,
+                    default=75,
+                    maximum=100,
+                    mapping=[(75, 75), (87.5, 89), (100, 100)],
+                )
+            ],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Wide", {"Width": 115}),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        font = _Font(
+            [
+                _Instance(115, 6),
+                _Instance(130, 7),
+            ]
+        )
+        result = extend_axis_maps_document(doc, font)
+        width = doc.axes[0]
+        assert result.axes == ["Width"]
+        assert result.extrapolated == []
+        assert result.points == [
+            ("Width", 112.5, 115.0),
+            ("Width", 125.0, 130.0),
+        ]
+        assert float(width.maximum) == 125.0
+        assert list(width.map) == [
+            (75.0, 75.0),
+            (87.5, 89.0),
+            (100.0, 100.0),
+            (112.5, 115.0),
+            (125.0, 130.0),
+        ]
+        assert "Width" in result.summary()
+        assert "extrapolated" not in result.summary()
+
+    def test_extrapolates_when_no_font_is_available(self):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=75,
+                    default=75,
+                    maximum=100,
+                    mapping=[(75, 75), (87.5, 89), (100, 100)],
+                )
+            ],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        result = extend_axis_maps_document(doc, font=None)
+        assert result.axes == ["Width"]
+        assert result.extrapolated == ["Width"]
+        assert len(result.points) == 1
+        assert result.points[0][0] == "Width"
+        assert result.points[0][2] == 130.0
+
+    def test_a_map_that_already_covers_masters_is_untouched(self, tmp_path):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=75,
+                    default=100,
+                    maximum=125,
+                    mapping=[
+                        (75, 75),
+                        (100, 100),
+                        (112.5, 115),
+                        (125, 130),
+                    ],
+                )
+            ],
+            [
+                make_source("Condensed", {"Width": 75}),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        path = tmp_path / "test.designspace"
+        doc.write(str(path))
+        before = path.read_bytes()
+        result = extend_axis_maps_to_masters(path, font=None)
+        assert result.axes == []
+        assert result.points == []
+        assert path.read_bytes() == before
+        assert result.summary() == "every axis map already covers its masters"
+
+    def test_monotonicity_conflict_skips_the_axis(self):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=75,
+                    default=75,
+                    maximum=100,
+                    mapping=[(75, 75), (87.5, 89), (100, 100)],
+                )
+            ],
+            [make_source("Wide", {"Width": 115})],
+        )
+        font = _Font([_Instance(115, axis_location=90)])
+        before_map = list(doc.axes[0].map)
+        result = extend_axis_maps_document(doc, font)
+        assert result.axes == []
+        assert result.skipped == ["Width"]
+        assert list(doc.axes[0].map) == before_map
+        assert "monotonicity" in result.summary()
