@@ -61,14 +61,21 @@ and after the designspace has been generated:
 from glyphs_source_prep import (
     deduplicate_designspace_document,
     ensure_default_master_document,
-    extend_axis_maps_document,
+    extend_axis_maps_to_masters_document,
     inherit_empty_master_kerning_document,
     repair_collapsing_axis_maps_document,
 )
 
+# Before the default-master repair. That one fills an unreachable master
+# with an identity point, and the inactive instance's user location would
+# then conflict with it and be dropped. Pass the Glyphs source so those
+# instances supply the user locations; without it, a master past the end
+# of the map is reached by extrapolation. A decreasing map is repaired
+# first, by repair_inverted_axis_maps_document.
+report = extend_axis_maps_to_masters_document(designspace, font)
+
 for repair in (
     deduplicate_designspace_document,
-    extend_axis_maps_document,
     ensure_default_master_document,
     repair_collapsing_axis_maps_document,
     inherit_empty_master_kerning_document,
@@ -193,22 +200,6 @@ rewritten only when something was actually removed.
 > Upstream: [glyphsLib#925](https://github.com/googlefonts/glyphsLib/issues/925)
 > fixed the layer-naming half of this in 6.2.4/6.2.5. What remains is #995.
 
-### An axis map that stops short of a master
-
-glyphsLib builds a non-identity axis map only from instances switched on for
-export. When wide or extended instances are off, the map stops before their
-masters and varLib's `splitInterpolable` drops those masters — a static
-"Standard" can end up as wide as Condensed, and the variable font's width axis
-has no effect past the truncated map.
-
-`extend_axis_maps_to_masters(path, font)` extends each map so every full
-master's design location is covered, taking user locations from inactive
-instances (and Axis Location / weight-width class fallbacks) before
-extrapolating. Call it **after** any inverted-map repair in your pipeline and
-**before** `ensure_default_master_document`: the default-master repair fills an
-unreachable master with an identity point, and an inactive instance's user
-location would conflict if extend ran after it.
-
 ### No master at the axis default
 
 glyphsLib emits a collapsed axis map when only a sparse set of instances export
@@ -238,6 +229,54 @@ locations and needs the minimum at −1, the default at 0 and the maximum at
 onto the endpoint it collapsed against and drops the now-redundant remap
 entry. Every master stays where it was — only the label on the default
 location changes.
+
+### An axis map that decreases
+
+glyphsLib merges per-instance Axis Locations last-write-wins, so two
+conflicting instances can emit a crossed map. Instantiator requires
+`map_forward(minimum) <= map_forward(default) <= map_forward(maximum)` and
+raises when that triple decreases. Reckless Italic Width was
+`(50→150), (75→50), (100→100), (125→150)`.
+
+`repair_inverted_axis_maps_document(designspace)` keeps the longest
+non-decreasing run by design location, which drops the minority conflicting
+entries. The Reckless map becomes `(75→50), (100→100), (125→150)`. A flat
+run is left for `repair_collapsing_axis_maps_document`. The file form is
+`repair_inverted_axis_maps(path)`.
+
+`extend_axis_maps_to_masters_document` calls
+`repair_inverted_axis_maps_document` before it adds points, so a caller that
+only extends still gets a monotonic map. Calling `repair_inverted_axis_maps`
+again changes nothing.
+
+### Masters past the end of the axis
+
+glyphsLib builds a non-identity axis map from the instances that are switched
+on for export, and discards the master mapping once that instance map exists.
+Switching the wide instances off leaves their masters in the file and stops
+the map at the widest instance that still exports. `splitInterpolable` then
+drops every master whose user location falls outside that range, and a
+Standard instance interpolates as if it were Condensed.
+
+`extend_axis_maps_to_masters_document(designspace, font)` adds the missing map
+points from the instances that are switched off (`exports` or `active`). A
+width stored as `7` is OS/2 width class 7, user location 125, not user
+location 7. The axis default and the instance locations stay as they are.
+Run it before `ensure_default_master_document`: that repair inserts an
+identity point for an unreachable master, and the two points then disagree.
+
+An `Axis Mappings` parameter is the designer's own map and is left alone.
+A decreasing map is handled first by `repair_inverted_axis_maps_document`,
+which this function calls; a point added here is skipped when that point
+itself would make the map decrease. A master that no
+instance accounts for is reached by continuing the slope of the end segment;
+`extrapolated` names the axes where that happened, because the user coordinate
+was invented rather than read from the source.
+
+> No upstream issue yet. glyphsLib's `update_mapping_from_instances` skips
+> inactive instances, and the master locations are not put back. Delete this
+> once a master stays in the interpolation when the instances at its end of
+> the axis are switched off.
 
 ### A mono master with no kerning
 
@@ -320,6 +359,10 @@ none is a permanent difference of opinion — so check the issues before assumin
 a fix is still needed, and drop the ones that have landed. The exception is
 `encoding`, which works around no bug: it stays as long as sources written by
 older Glyphs versions do.
+
+`extend_axis_maps_to_masters` is the other exception: no glyphsLib issue is
+filed for it yet. It stays until glyphsLib keeps a master whose instances are
+switched off for export.
 
 The tests are the useful part to keep either way: they are small, they assert
 the *behaviour* rather than the workaround, and they double as the reproduction
