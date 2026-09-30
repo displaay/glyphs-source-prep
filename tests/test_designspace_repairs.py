@@ -5,9 +5,14 @@ from __future__ import annotations
 import pytest
 from fontTools.designspaceLib import (
     AxisDescriptor,
+    AxisLabelDescriptor,
     DesignSpaceDocument,
+    DiscreteAxisDescriptor,
     InstanceDescriptor,
+    LocationLabelDescriptor,
+    RangeAxisSubsetDescriptor,
     SourceDescriptor,
+    VariableFontDescriptor,
 )
 
 from glyphs_source_prep import (
@@ -53,6 +58,19 @@ def make_doc(axes, sources):
     for source in sources:
         doc.addSource(source)
     return doc
+
+
+def make_italic_doc():
+    """A designspace 5 document whose only axis is discrete."""
+    italic = DiscreteAxisDescriptor()
+    italic.name = "Italic"
+    italic.tag = "ital"
+    italic.values = [0, 1]
+    italic.default = 0
+    return make_doc(
+        [italic],
+        [make_source("Roman", {"Italic": 0}), make_source("Italic", {"Italic": 1})],
+    )
 
 
 class TestMasterSources:
@@ -653,6 +671,78 @@ class TestExtendAxisMapsToMasters:
         ]
         assert result.points == [("Width", 150.0, 200.0)]
         assert result.extrapolated == ["Width"]
+        assert result.inverted == ["Width"]
+
+    def test_the_document_form_reports_an_inverted_repair_that_adds_no_point(self):
+        doc = make_doc(
+            [_reckless_width()],
+            [
+                make_source("Condensed", {"Width": 50}, copy_info=True),
+                make_source("Wide", {"Width": 150}),
+            ],
+        )
+        result = extend_axis_maps_to_masters_document(doc, font=None)
+        assert result.axes == []
+        assert result.inverted == ["Width"]
+        assert result.repaired == 1
+        assert "Width" in result.summary()
+        result.summary().encode("ascii")
+
+    def test_an_unmapped_axis_stays_an_identity(self):
+        # Stem units on an axis with no map: a weight class of 700 would
+        # squeeze user 160..700 into twenty design units.
+        doc = make_doc(
+            [make_axis(minimum=100, default=100, maximum=160)],
+            [
+                make_source("Light", {"Weight": 100}, copy_info=True),
+                make_source("Bold", {"Weight": 180}),
+            ],
+        )
+        font = _Font(
+            [_Instance(180, weight="Bold", name="Bold")],
+            axes=[_Axis("Weight", "wght")],
+        )
+        result = extend_axis_maps_to_masters_document(doc, font)
+        weight = doc.axes[0]
+        assert result.points == [("Weight", 180.0, 180.0)]
+        assert result.extrapolated == []
+        assert result.extrapolated_points == []
+        assert list(weight.map) == []
+        assert float(weight.maximum) == 180.0
+
+    def test_an_instance_past_the_outermost_master_does_not_end_the_axis(self):
+        doc = _width_doc(
+            [(75, 75), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        font = _Font(
+            [_Instance(130, 7, name="Extended"), _Instance(150, 9, name="Ultra")]
+        )
+        result = extend_axis_maps_to_masters_document(doc, font)
+        assert result.points == [("Width", 125.0, 130.0)]
+        assert float(doc.axes[0].maximum) == 125.0
+        assert any("Ultra" in line and "outermost master" in line for line in result.skipped)
+
+    def test_a_source_without_the_axis_is_reported_once(self):
+        doc = _width_doc(
+            [(75, 75), (100, 100)],
+            [make_source("Extended", {"Width": 130})],
+        )
+        font = _Font(
+            [_Instance(130, 7, name="Extended"), _Instance(115, 6, name="Wide")],
+            axes=[_Axis("Optical Size", "opsz")],
+        )
+        result = extend_axis_maps_to_masters_document(doc, font)
+        assert result.extrapolated == ["Width"]
+        assert len(result.skipped) == 1
+        assert "not in the source" in result.skipped[0]
+
+    def test_a_discrete_axis_is_skipped(self):
+        doc = make_italic_doc()
+        assert extend_axis_maps_to_masters_document(doc, font=None).axes == []
 
 
 def _reckless_width(**overrides):
@@ -778,6 +868,88 @@ class TestRepairInvertedAxisMaps:
         assert float(axis.minimum) == 0.0
         assert float(axis.maximum) == 50.0
 
+    def test_a_fully_decreasing_map_keeps_the_default_on_its_master(self):
+        doc = make_doc(
+            [make_axis(minimum=100, default=100, maximum=900, mapping=[(100, 200), (900, 40)])],
+            [
+                make_source("Thin", {"Weight": 40}),
+                make_source("Black", {"Weight": 200}, copy_info=True),
+            ],
+        )
+        axis = doc.axes[0]
+        assert repair_inverted_axis_maps_document(doc).axes == ["Weight"]
+        assert list(axis.map) == [(40.0, 40.0), (200.0, 200.0)]
+        assert float(axis.map_forward(axis.default)) == 200.0
+        assert doc.findDefault().name == "Black"
+
+    def test_the_default_keeps_its_design_location_over_a_longer_run(self):
+        # The three entries after the default are the longest run, and they
+        # all sit below it: keeping them would move the default to design 50.
+        doc = make_doc(
+            [
+                make_axis(
+                    minimum=100,
+                    default=100,
+                    maximum=400,
+                    mapping=[(100, 100), (200, 50), (300, 60), (400, 70)],
+                )
+            ],
+            [
+                make_source("A", {"Weight": 50}),
+                make_source("B", {"Weight": 60}),
+                make_source("C", {"Weight": 70}),
+                make_source("Default", {"Weight": 100}, copy_info=True),
+            ],
+        )
+        axis = doc.axes[0]
+        assert repair_inverted_axis_maps_document(doc).axes == ["Weight"]
+        assert float(axis.map_forward(axis.default)) == 100.0
+        assert doc.findDefault().name == "Default"
+        assert not any(
+            later[1] < earlier[1]
+            for earlier, later in zip(axis.map, axis.map[1:], strict=False)
+        )
+
+    def test_a_declared_bound_past_a_kept_end_entry_is_preserved(self):
+        # 50..200 reaches past the map keys 75..125. The entry at 75 is the
+        # conflicting one, so the minimum follows the map; 125 survives, and
+        # the maximum beyond it is the document's own and stays.
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Width",
+                    tag="wdth",
+                    minimum=50,
+                    default=100,
+                    maximum=200,
+                    mapping=[(75, 150), (100, 100), (125, 150)],
+                )
+            ],
+            [
+                make_source("Standard", {"Width": 100}, copy_info=True),
+                make_source("Wide", {"Width": 150}),
+            ],
+        )
+        axis = doc.axes[0]
+        assert repair_inverted_axis_maps_document(doc).axes == ["Width"]
+        assert list(axis.map) == [(100.0, 100.0), (125.0, 150.0)]
+        assert float(axis.minimum) == 100.0
+        assert float(axis.maximum) == 200.0
+
+    def test_float_noise_is_not_a_decrease(self):
+        mapping = [(100, 100.0000001), (200, 100.0), (300, 100.0)]
+        doc = make_doc(
+            [make_axis(minimum=100, default=200, maximum=300, mapping=mapping)],
+            [make_source("Only", {"Weight": 100})],
+        )
+        assert repair_inverted_axis_maps_document(doc).axes == []
+        assert list(doc.axes[0].map) == mapping
+
+    def test_a_discrete_axis_is_skipped(self):
+        doc = make_italic_doc()
+        doc.axes[0].map = [(0, 1), (1, 0)]
+        assert repair_inverted_axis_maps_document(doc).axes == []
+
     def test_extend_persists_the_inverted_repair_when_no_point_is_added(self, tmp_path):
         doc = make_doc(
             [_reckless_width()],
@@ -881,6 +1053,71 @@ class TestResetAxisMapsToDesign:
         doc.addInstance(_instance_at("Wide", {"Width": 110}))
         reset_axis_maps_to_design_document(doc)
         assert float(doc.axes[0].maximum) == 110.0
+
+    def test_an_instance_user_location_keeps_its_design(self):
+        # User 125 is design 130 through the map. Once the axis is 1:1 the
+        # same number would name design 125, so the instance is restated.
+        doc = _width_doc(
+            [(75, 75), (100, 100), (125, 130)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Standard", {"Width": 100}),
+            ],
+            maximum=125,
+        )
+        instance = InstanceDescriptor()
+        instance.name = "Extended"
+        instance.userLocation = {"Width": 125}
+        doc.addInstance(instance)
+        assert instance.getFullDesignLocation(doc) == {"Width": 130}
+
+        reset_axis_maps_to_design_document(doc)
+        assert instance.getFullDesignLocation(doc) == {"Width": 130.0}
+        assert "Width" not in instance.userLocation
+        assert float(doc.axes[0].maximum) == 130.0
+
+    def test_labels_and_subsets_follow_the_axis(self):
+        doc = _width_doc(
+            [(75, 75), (100, 100), (125, 130)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+            maximum=125,
+        )
+        width = doc.axes[0]
+        width.axisLabels = [
+            AxisLabelDescriptor(
+                name="Extended", userValue=125, userMinimum=112.5, userMaximum=125
+            ),
+            AxisLabelDescriptor(name="Condensed", userValue=75, linkedUserValue=125),
+        ]
+        doc.locationLabels = [
+            LocationLabelDescriptor(name="Extended", userLocation={"Width": 125})
+        ]
+        doc.variableFonts = [
+            VariableFontDescriptor(
+                name="VF",
+                axisSubsets=[RangeAxisSubsetDescriptor(name="Width", userMaximum=125)],
+            )
+        ]
+        reset_axis_maps_to_design_document(doc)
+        extended, condensed = width.axisLabels
+        assert (extended.userMinimum, extended.userValue, extended.userMaximum) == (
+            115.0,
+            130.0,
+            130.0,
+        )
+        assert condensed.linkedUserValue == 130.0
+        assert doc.locationLabels[0].userLocation == {"Width": 130.0}
+        subset = doc.variableFonts[0].axisSubsets[0]
+        assert subset.userMaximum == 130.0
+        assert subset.userMinimum == float("-inf")
+        assert subset.userDefault is None
+
+    def test_a_discrete_axis_is_skipped(self):
+        doc = make_italic_doc()
+        assert reset_axis_maps_to_design_document(doc, tags=("ital",)).axes == []
 
     def test_a_brace_layer_does_not_set_the_range(self):
         doc = _width_doc(

@@ -246,14 +246,22 @@ raises when that triple decreases. Reckless Italic Width was
 
 `repair_inverted_axis_maps_document(designspace)` keeps the longest
 non-decreasing run by design location, which drops the minority conflicting
-entries. The Reckless map becomes `(75→50), (100→100), (125→150)`. A flat
+entries. The Reckless map becomes `(75→50), (100→100), (125→150)`. The
+default's own entry is never the one dropped: an entry that conflicts with it
+goes first, so the default stays on the master it was on. A flat
 run is left for `repair_collapsing_axis_maps_document`. The file form is
 `repair_inverted_axis_maps(path)`.
 
+The axis range follows the entries that are kept, so a dropped end entry
+takes its end of the range with it (Reckless goes from 50 to 75). A declared
+bound beyond an end entry that survives is left where it was.
+
 `extend_axis_maps_to_masters_document` calls
 `repair_inverted_axis_maps_document` before it adds points, so a caller that
-only extends still gets a monotonic map. Calling `repair_inverted_axis_maps`
-again changes nothing.
+only extends still gets a monotonic map. Its report names those axes in
+`inverted` and counts them in `repaired`, because the document changed even
+when no point was added. Calling `repair_inverted_axis_maps` again changes
+nothing.
 
 ### Masters past the end of the axis
 
@@ -270,6 +278,11 @@ width stored as `7` is OS/2 width class 7, user location 125, not user
 location 7. The axis default and the instance locations stay as they are.
 Run it before `ensure_default_master_document`: that repair inserts an
 identity point for an unreachable master, and the two points then disagree.
+
+An axis with no map is 1:1 with the design coordinates and stays 1:1: its
+range is widened to the master and no width or weight class is mixed into it.
+An instance beyond the outermost master adds no point, so the axis always ends
+on a master. A discrete axis is skipped.
 
 An `Axis Mappings` parameter is the designer's own map and is left alone.
 A decreasing map is handled first by `repair_inverted_axis_maps_document`,
@@ -299,7 +312,10 @@ value selects a different design in each.
 `reset_axis_maps_to_design_document(designspace)` drops the map on `wdth` and
 spans the axis over the design locations of the full masters and the
 instances. Nothing moves — sources and instances are already in design space —
-only the label on each location changes. Neither the width class nor an
+only the label on each location changes. What addresses the axis in user
+coordinates is carried over through the old map: an instance `userLocation`
+becomes the design location it resolved to, and axis labels, location labels
+and variable-font subsets are restated. Neither the width class nor an
 `Axis Location` is read: a source can get both wrong, and the coordinate the
 outlines were drawn at is the only evidence of the width. OS/2 `usWidthClass`
 is a separate matter and still has to be one of the nine classes.

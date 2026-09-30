@@ -55,13 +55,16 @@ that takes a path and rewrites the file, for a caller handing it to fontmake.
 from __future__ import annotations
 
 import logging
+import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from fontTools.designspaceLib import (
     AxisDescriptor,
     DesignSpaceDocument,
+    DiscreteAxisDescriptor,
     SourceDescriptor,
 )
 
@@ -357,7 +360,7 @@ def ensure_default_master_document(
                 changed = True
 
         if changed:
-            result.axes.append(axis.name or axis.tag or "?")
+            result.axes.append(_axis_label(axis))
 
     if designspace.findDefault() is None:
         # The rebase did not land on a master after all. Put the axes back and
@@ -464,7 +467,7 @@ def repair_collapsing_axis_maps_document(
             for (user, design) in sorted(mapping):
                 by_user[user] = design
             axis.map = sorted(by_user.items())
-            result.axes.append(axis.name or axis.tag or "?")
+            result.axes.append(_axis_label(axis))
 
     if result.axes:
         LOGGER.warning("Repaired collapsing axis map(s) on: %s", result.axes)
@@ -538,15 +541,29 @@ class AxisRangeResult:
     extrapolated_points: list[tuple[str, float, float]] = field(default_factory=list)
     #: Instances that could not contribute a point, and why.
     skipped: list[str] = field(default_factory=list)
+    #: Axes whose decreasing map :func:`repair_inverted_axis_maps_document`
+    #: reduced before any point was added. The document changed on these even
+    #: when :attr:`axes` is empty.
+    inverted: list[str] = field(default_factory=list)
 
     @property
     def repaired(self) -> int:
-        return len(self.axes)
+        return len({*self.axes, *self.inverted})
 
     def summary(self) -> str:
         """A single line for a processing log."""
-        if not self.axes:
+        if not self.axes and not self.inverted:
             return "every master is already inside the axis range"
+        reduced = (
+            "decreasing axis map reduced to its longest non-decreasing run on: "
+            + ", ".join(self.inverted)
+        )
+        if not self.axes:
+            return reduced
+        extended = self._extended_summary()
+        return f"{reduced}; {extended}" if self.inverted else extended
+
+    def _extended_summary(self) -> str:
         parts: list[str] = []
         for name in self.axes:
             added = ", ".join(
@@ -853,26 +870,6 @@ def _clamped_to_registered_range(tag: str | None, user: float) -> float:
     return user
 
 
-def _axis_snapshot(
-    designspace: DesignSpaceDocument,
-) -> tuple[tuple[object, ...], ...]:
-    """Axis maps and bounds, so a path repair can see a change it must write."""
-
-    def _bound(value: float | None) -> float | None:
-        return None if value is None else float(value)
-
-    return tuple(
-        (
-            axis.name,
-            tuple((float(user), float(design)) for user, design in (axis.map or [])),
-            _bound(axis.minimum),
-            _bound(axis.maximum),
-            _bound(axis.default),
-        )
-        for axis in designspace.axes
-    )
-
-
 def _apply_map(
     axis: AxisDescriptor,
     pairs: list[tuple[float, float]],
@@ -920,19 +917,32 @@ def _extend_one_axis(
 
     base = list(pairs) if pairs else _identity_endpoints(axis)
     accepted: list[tuple[float, float]] = []
-    if font is not None:
-        index = _font_axis_index(font, axis)
+    # An axis with no map is 1:1 with the design coordinates. A width or
+    # weight class is in other units, so a point read from an instance would
+    # leave a map that is half one and half the other; the axis stays 1:1 and
+    # the master is reached by the identity instead.
+    index = _font_axis_index(font, axis) if font is not None and had_map else None
+    if font is not None and had_map and index is None:
+        result.skipped.append(f"{label}: the axis is not in the source, no instance was read")
+    if index is not None:
+        # The axis has to end on a master: past the last one there is no
+        # design for the range to describe.
+        master_lo = min([design_lo, *missing])
+        master_hi = max([design_hi, *missing])
         instances = list(getattr(font, "instances", None) or [])
         for instance in instances:
             if not _is_inactive_instance(instance) or _is_variable_instance(instance):
-                continue
-            if index is None:
                 continue
             design = _instance_design(instance, index)
             if design is None or not _outside(design, design_lo, design_hi):
                 continue
             user = _instance_user_location(instance, axis, design, use_class=use_class)
             name = str(getattr(instance, "name", None) or "?")
+            if _outside(design, master_lo, master_hi):
+                result.skipped.append(
+                    f"{label}: {name} design {design:g} lies beyond the outermost master"
+                )
+                continue
             if user is None:
                 result.skipped.append(f"{label}: {name} has no user location")
                 continue
@@ -992,7 +1002,8 @@ def _extend_one_axis(
     result.axes.append(label)
     for user, design in accepted:
         result.points.append((label, user, design))
-    if invented:
+    if invented and had_map:
+        # On a 1:1 axis the user coordinate is the design one, not a guess.
         result.extrapolated.append(label)
         result.extrapolated_points.extend((label, user, design) for user, design in invented)
 
@@ -1013,9 +1024,13 @@ def extend_axis_maps_to_masters_document(
 
     A decreasing map is repaired first, by
     :func:`repair_inverted_axis_maps_document`, so a crossed map is reduced to
-    its longest non-decreasing run before any point is added. This result
-    names only the points added here; the inverted repair's own result names
-    the axes it changed.
+    its longest non-decreasing run before any point is added. The axes that
+    repair changed are named in ``inverted`` and counted by ``repaired``;
+    ``axes`` and ``points`` name only what was added here.
+
+    An axis with no map is 1:1 with the design coordinates and stays that
+    way: its range is widened to the master and no instance is read. A
+    discrete axis has no range to extend and is skipped.
 
     The axis default and the instance locations are left alone: instances are
     already in design space, and they interpolate correctly once the far
@@ -1029,10 +1044,11 @@ def extend_axis_maps_to_masters_document(
         source.
     :returns: An :class:`AxisRangeResult`.
     """
-    repair_inverted_axis_maps_document(designspace)
-    result = AxisRangeResult()
+    result = AxisRangeResult(inverted=repair_inverted_axis_maps_document(designspace).axes)
     use_class = font is not None and not _masters_declare_axis_locations(font)
     for axis in designspace.axes:
+        if isinstance(axis, DiscreteAxisDescriptor):
+            continue
         _extend_one_axis(designspace, axis, font, use_class=use_class, result=result)
     if result.axes:
         LOGGER.warning(
@@ -1056,11 +1072,9 @@ def extend_axis_maps_to_masters(
     """
     path = os.fspath(designspace_path)
     designspace = DesignSpaceDocument.fromfile(path)
-    before = _axis_snapshot(designspace)
     result = extend_axis_maps_to_masters_document(designspace, font)
-    # The inverted-map repair can change the file without adding a point, so
-    # the write follows the document, not just ``result.axes``.
-    if _axis_snapshot(designspace) != before:
+    # The inverted-map repair can change the file without adding a point.
+    if result.repaired:
         designspace.write(path)
     return result
 
@@ -1090,6 +1104,50 @@ class AxisResetResult:
         return f"axis map reset to the design coordinates on: {parts}"
 
 
+def _restate_user_fields(
+    designspace: DesignSpaceDocument,
+    axis: AxisDescriptor,
+    to_design: Callable[[float], float],
+) -> None:
+    """Carry every user coordinate on ``axis`` over to the design coordinates.
+
+    Called while the map is still in place. An instance located by
+    ``userLocation`` is restated in ``designLocation``, where it already was
+    in effect; labels and variable-font subsets stay user coordinates, which
+    on a 1:1 axis are the design ones.
+    """
+
+    def _moved(value: float | None) -> float | None:
+        # An open subset bound is an infinity, and an unset one is None.
+        if value is None or math.isinf(value):
+            return value
+        return float(to_design(value))
+
+    name = axis.name
+    for instance in designspace.instances:
+        user_location = instance.userLocation or {}
+        if not isinstance(user_location.get(name), (int, float)):
+            continue
+        design = float(to_design(user_location.pop(name)))
+        # A design location on the same axis already took precedence.
+        instance.designLocation = {name: design, **(instance.designLocation or {})}
+    for label in axis.axisLabels or []:
+        label.userMinimum = _moved(label.userMinimum)
+        label.userValue = _moved(label.userValue)
+        label.userMaximum = _moved(label.userMaximum)
+        label.linkedUserValue = _moved(label.linkedUserValue)
+    for location_label in designspace.locationLabels or []:
+        if name in (location_label.userLocation or {}):
+            location_label.userLocation[name] = _moved(location_label.userLocation[name])
+    for variable_font in designspace.variableFonts or []:
+        for subset in variable_font.axisSubsets or []:
+            if subset.name != name:
+                continue
+            for attribute in ("userMinimum", "userDefault", "userMaximum", "userValue"):
+                if hasattr(subset, attribute):
+                    setattr(subset, attribute, _moved(getattr(subset, attribute)))
+
+
 def reset_axis_maps_to_design_document(
     designspace: DesignSpaceDocument,
     tags: tuple[str, ...] = ("wdth",),
@@ -1111,6 +1169,11 @@ def reset_axis_maps_to_design_document(
     and a Wide instance of Reckless Italic both claim 50), and only the
     coordinate the outlines were drawn at is evidence of the width.
 
+    Whatever else addresses the axis in user coordinates follows it: an
+    instance ``userLocation`` is restated as the design location it resolved
+    to, and axis labels, location labels and variable-font subsets are put
+    through the map before it is dropped. A discrete axis is skipped.
+
     This also takes care of what :func:`repair_inverted_axis_maps_document`
     and :func:`extend_axis_maps_to_masters_document` would find on the same
     axis, so run it before them; they still apply to every other axis.
@@ -1124,7 +1187,7 @@ def reset_axis_maps_to_design_document(
     result = AxisResetResult()
     masters = master_sources(designspace)
     for axis in designspace.axes:
-        if axis.tag not in tags or not axis.name:
+        if axis.tag not in tags or not axis.name or isinstance(axis, DiscreteAxisDescriptor):
             continue
         designs = [
             float(source.getFullDesignLocation(designspace)[axis.name]) for source in masters
@@ -1135,6 +1198,13 @@ def reset_axis_maps_to_design_document(
             float(value)
             for instance in designspace.instances
             for value in [(instance.designLocation or {}).get(axis.name)]
+            if isinstance(value, (int, float))
+        )
+        designs.extend(
+            float(axis.map_forward(value))
+            for instance in designspace.instances
+            if axis.name not in (instance.designLocation or {})
+            for value in [(instance.userLocation or {}).get(axis.name)]
             if isinstance(value, (int, float))
         )
         minimum = min(designs)
@@ -1148,6 +1218,7 @@ def reset_axis_maps_to_design_document(
         )
         if unchanged:
             continue
+        _restate_user_fields(designspace, axis, axis.map_forward)
         axis.map = []
         axis.minimum = minimum
         axis.maximum = maximum
@@ -1251,14 +1322,14 @@ def _longest_nondecreasing_run(
             None,
         )
         for j in range(i):
-            if designs[j] > designs[i]:
+            if designs[j] > designs[i] + EPSILON:
                 continue
             prev_len, prev_has_default, _, prev_strict, prev_first, _ = dp[j]
             candidate = (
                 prev_len + 1,
                 prev_has_default or _is_default(i),
                 designs[i] - prev_first,
-                prev_strict + (1 if designs[j] < designs[i] else 0),
+                prev_strict + (1 if designs[j] < designs[i] - EPSILON else 0),
                 prev_first,
                 j,
             )
@@ -1275,6 +1346,33 @@ def _longest_nondecreasing_run(
     return kept
 
 
+def _agreeing_with_default(
+    pairs: list[tuple[float, float]], default_user: float
+) -> list[tuple[float, float]]:
+    """The entries that can share a non-decreasing map with the default's own.
+
+    The default is the location every master is a delta from, so its entry is
+    the one a repair may not drop. An entry below it in user space and above
+    it in design space (or the reverse) is in conflict with it, and goes
+    first. A default that is not a map key states no design location of its
+    own - it is interpolated across the very crossing being repaired - so
+    nothing is filtered on it.
+    """
+    default_design = next(
+        (design for (user, design) in pairs if abs(user - default_user) < EPSILON),
+        None,
+    )
+    if default_design is None:
+        return pairs
+    return [
+        (user, design)
+        for (user, design) in pairs
+        if abs(user - default_user) < EPSILON
+        or (user < default_user and design <= default_design + EPSILON)
+        or (user > default_user and design >= default_design - EPSILON)
+    ]
+
+
 def repair_inverted_axis_maps_document(
     designspace: DesignSpaceDocument,
 ) -> InvertedAxisMapResult:
@@ -1287,61 +1385,63 @@ def repair_inverted_axis_maps_document(
     — and interpolation raises ``ValueError`` on the design triple.
 
     The repair keeps the longest non-decreasing run by design, which drops the
-    minority conflicting entries and preserves the majority mapping. Flat runs
-    are left for :func:`repair_collapsing_axis_maps_document`.
+    minority conflicting entries and preserves the majority mapping. The
+    default's own entry is never one of those dropped, so the default stays
+    on the design location - and the master - it was on. Flat runs are left
+    for :func:`repair_collapsing_axis_maps_document`.
     :func:`extend_axis_maps_to_masters_document` calls this before it adds
     points.
+
+    The axis range follows the entries that are kept: an end entry that is
+    dropped takes its end of the range with it. A declared bound that lay
+    beyond an end entry that survives is the document's own and stays.
 
     :param designspace: The document to repair. Not written to disk - see
         :func:`repair_inverted_axis_maps` for that.
     :returns: An :class:`InvertedAxisMapResult`.
     """
     result = InvertedAxisMapResult()
-    masters = master_sources(designspace)
     for axis in designspace.axes:
-        if not axis.map:
+        if not axis.map or isinstance(axis, DiscreteAxisDescriptor):
             continue
         pairs = sorted(_axis_map_pairs(axis))
-        has_decrease = any(
-            pairs[i][1] < pairs[i - 1][1] - EPSILON for i in range(1, len(pairs))
-        )
         design_min = float(axis.map_forward(axis.minimum))
         design_default = float(axis.map_forward(axis.default))
         design_max = float(axis.map_forward(axis.maximum))
-        if not has_decrease and design_min <= design_default <= design_max:
+        in_order = (
+            design_min <= design_default + EPSILON and design_default <= design_max + EPSILON
+        )
+        if not _map_decreases(pairs) and in_order:
             continue
 
-        default_user = float(axis.default) if axis.default is not None else None
-        kept = _longest_nondecreasing_run(pairs, default_user)
-        source_vals = sorted(
-            {
-                float(source.location[axis.name])
-                for source in masters
-                if axis.name in (source.location or {})
-            }
+        default_user = float(axis.default)
+        kept = _longest_nondecreasing_run(
+            _agreeing_with_default(pairs, default_user), default_user
         )
+        source_vals = sorted(set(_master_designs(designspace, axis.name or "")))
         if len(kept) < 2 and source_vals:
             # No monotonic run to keep (for example a fully decreasing map):
             # fall back to an identity map over the master designs so every
-            # master is covered.
+            # master is covered. The default keeps the design location the
+            # old map gave it, which is read before the map is replaced. If
+            # no master sits there, ensure_default_master_document rebases it.
             axis.map = [(value, value) for value in source_vals]
             axis.minimum = source_vals[0]
             axis.maximum = source_vals[-1]
-            preferred = designspace.findDefault()
-            default_design = source_vals[0]
-            if (
-                preferred is not None
-                and not preferred.layerName
-                and axis.name in (preferred.location or {})
-            ):
-                default_design = float(preferred.location[axis.name])
-            axis.default = min(max(default_design, axis.minimum), axis.maximum)
+            axis.default = min(max(design_default, axis.minimum), axis.maximum)
         else:
             axis.map = kept
-            axis.minimum = min(user for user, _ in kept)
-            axis.maximum = max(user for user, _ in kept)
-            if default_user is not None:
-                axis.default = min(max(default_user, axis.minimum), axis.maximum)
+            # designspaceLib extrapolates the map past its last entry, so a
+            # bound declared beyond an entry that is still there is kept.
+            declared_min = float(axis.minimum)
+            declared_max = float(axis.maximum)
+            kept_min = kept[0][0]
+            kept_max = kept[-1][0]
+            first_kept = abs(kept_min - pairs[0][0]) < EPSILON
+            last_kept = abs(kept_max - pairs[-1][0]) < EPSILON
+            axis.minimum = declared_min if first_kept and declared_min < kept_min else kept_min
+            axis.maximum = declared_max if last_kept and declared_max > kept_max else kept_max
+            axis.default = min(max(default_user, axis.minimum), axis.maximum)
 
         result.axes.append(_axis_label(axis))
 
