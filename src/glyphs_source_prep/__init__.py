@@ -52,6 +52,7 @@ from .brace_layers import (
 from .designspace import (
     AxisMapResult,
     AxisRangeResult,
+    AxisResetResult,
     DeduplicateResult,
     DefaultMasterResult,
     InvertedAxisMapResult,
@@ -66,6 +67,8 @@ from .designspace import (
     repair_collapsing_axis_maps_document,
     repair_inverted_axis_maps,
     repair_inverted_axis_maps_document,
+    reset_axis_maps_to_design,
+    reset_axis_maps_to_design_document,
 )
 from .encoding import (
     SourceDecodeResult,
@@ -96,6 +99,7 @@ __all__ = [
     "BraceLayerAlignResult",
     "AxisMapResult",
     "AxisRangeResult",
+    "AxisResetResult",
     "DeduplicateResult",
     "DefaultMasterResult",
     "InvertedAxisMapResult",
@@ -129,6 +133,8 @@ __all__ = [
     "repair_collapsing_axis_maps_document",
     "repair_inverted_axis_maps",
     "repair_inverted_axis_maps_document",
+    "reset_axis_maps_to_design",
+    "reset_axis_maps_to_design_document",
     "unambiguous_order",
     "variable_font_origin_master_id",
 ]

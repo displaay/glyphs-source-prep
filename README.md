@@ -64,7 +64,13 @@ from glyphs_source_prep import (
     extend_axis_maps_to_masters_document,
     inherit_empty_master_kerning_document,
     repair_collapsing_axis_maps_document,
+    reset_axis_maps_to_design_document,
 )
+
+# First: the width axis carries the numbers the designer drew at, not the
+# nine OS/2 width classes glyphsLib derives a map from. After this the axis
+# is 1:1 and the repairs below have nothing left to find on it.
+report = reset_axis_maps_to_design_document(designspace)
 
 # Before the default-master repair. That one fills an unreachable master
 # with an identity point, and the inactive instance's user location would
@@ -270,13 +276,42 @@ A decreasing map is handled first by `repair_inverted_axis_maps_document`,
 which this function calls; a point added here is skipped when that point
 itself would make the map decrease. A master that no
 instance accounts for is reached by continuing the slope of the end segment;
-`extrapolated` names the axes where that happened, because the user coordinate
-was invented rather than read from the source.
+`extrapolated` names the axes where that happened and `extrapolated_points`
+the points themselves, because the user coordinate was invented rather than
+read from the source. An invented coordinate stays inside the range the
+OpenType axis registry allows (`wght` ends at 1000).
 
 > No upstream issue yet. glyphsLib's `update_mapping_from_instances` skips
 > inactive instances, and the master locations are not put back. Delete this
 > once a master stays in the interpolation when the instances at its end of
 > the axis are switched off.
+
+### A width axis relabelled in width classes
+
+A Displaay source sets the width axis in the numbers the designer drew at —
+Greed is 75, 89, 100, 115, 130. Without an `Axis Location`, glyphsLib takes
+the user location of an instance from its OS/2 width class instead, and the
+class has nine steps: 89 becomes 87.5, 115 becomes 112.5 and 130 becomes 125.
+A tool that keeps that map ships a variable font whose `wdth` ends at 125, a
+tool that drops it ships one that ends at 130, and the same `font-stretch`
+value selects a different design in each.
+
+`reset_axis_maps_to_design_document(designspace)` drops the map on `wdth` and
+spans the axis over the design locations of the full masters and the
+instances. Nothing moves — sources and instances are already in design space —
+only the label on each location changes. Neither the width class nor an
+`Axis Location` is read: a source can get both wrong, and the coordinate the
+outlines were drawn at is the only evidence of the width. OS/2 `usWidthClass`
+is a separate matter and still has to be one of the nine classes.
+
+Run it first. A 1:1 axis already contains every master and cannot decrease,
+so the two repairs above find nothing on it and go on handling the other
+axes. `tags` names the axes to reset; weight is not in the default, because a
+stem of 450 labelled 400 is a map the designer wants. The file form is
+`reset_axis_maps_to_design(path)`.
+
+This is a convention, not a glyphsLib bug, so there is no upstream issue to
+wait for.
 
 ### A mono master with no kerning
 
@@ -363,6 +398,10 @@ older Glyphs versions do.
 `extend_axis_maps_to_masters` is the other exception: no glyphsLib issue is
 filed for it yet. It stays until glyphsLib keeps a master whose instances are
 switched off for export.
+
+`reset_axis_maps_to_design` is not waiting for anything. It states which
+numbers a Displaay width axis carries and stays as long as that convention
+does.
 
 The tests are the useful part to keep either way: they are small, they assert
 the *behaviour* rather than the workaround, and they double as the reproduction

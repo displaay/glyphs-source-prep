@@ -40,6 +40,12 @@ be non-decreasing and raises when they are not.
 :func:`repair_inverted_axis_maps` keeps the longest non-decreasing run, and
 :func:`extend_axis_maps_to_masters` runs that repair before it adds points.
 
+**A width axis relabelled in width classes.** Not a failure but a convention:
+without an ``Axis Location`` glyphsLib labels each width with its OS/2 width
+class, so a design drawn at 130 ships as ``wdth`` 125.
+:func:`reset_axis_maps_to_design` makes the axis 1:1 with the design
+coordinates, which also leaves the two repairs above nothing to find on it.
+
 Each repair comes in two forms: one that takes a
 :class:`~fontTools.designspaceLib.DesignSpaceDocument` and edits it in place,
 for a caller that built the document in memory and never writes it out, and one
@@ -524,8 +530,12 @@ class AxisRangeResult:
     axes: list[str] = field(default_factory=list)
     #: Map points added, as ``(axis name, user location, design location)``.
     points: list[tuple[str, float, float]] = field(default_factory=list)
-    #: Axes where no instance supplied the missing point, so it was extrapolated.
+    #: Axes where no instance supplied a missing point, so it was extrapolated.
     extrapolated: list[str] = field(default_factory=list)
+    #: The subset of :attr:`points` that was extrapolated rather than read from
+    #: an inactive instance. The other points on the same axis are the
+    #: designer's.
+    extrapolated_points: list[tuple[str, float, float]] = field(default_factory=list)
     #: Instances that could not contribute a point, and why.
     skipped: list[str] = field(default_factory=list)
 
@@ -540,12 +550,12 @@ class AxisRangeResult:
         parts: list[str] = []
         for name in self.axes:
             added = ", ".join(
-                f"{user:g}→{design:g}"
-                for (axis_name, user, design) in self.points
-                if axis_name == name
+                f"{point[1]:g}->{point[2]:g}"
+                + (" (extrapolated)" if point in self.extrapolated_points else "")
+                for point in self.points
+                if point[0] == name
             )
-            note = " (extrapolated)" if name in self.extrapolated else ""
-            parts.append(f"{name} {added}{note}")
+            parts.append(f"{name} {added}")
         return (
             "extended axis map to reach masters outside the active-instance range: "
             + "; ".join(parts)
@@ -824,6 +834,25 @@ def _extrapolated_user(pairs: list[tuple[float, float]], target: float, *, high:
     return end_user + (target - end_design) / slope
 
 
+#: User ranges the OpenType axis registry allows. An extrapolated user
+#: coordinate is invented, so it must not leave them: a ``wght`` of 1080 is
+#: not a weight any consumer accepts. ``None`` is an open end.
+_REGISTERED_USER_RANGE: dict[str, tuple[float | None, float | None]] = {
+    "wght": (1.0, 1000.0),
+    "ital": (0.0, 1.0),
+    "slnt": (-90.0, 90.0),
+}
+
+
+def _clamped_to_registered_range(tag: str | None, user: float) -> float:
+    low, high = _REGISTERED_USER_RANGE.get(tag or "", (None, None))
+    if low is not None and user < low:
+        return low
+    if high is not None and user > high:
+        return high
+    return user
+
+
 def _axis_snapshot(
     designspace: DesignSpaceDocument,
 ) -> tuple[tuple[object, ...], ...]:
@@ -851,8 +880,10 @@ def _apply_map(
     had_map: bool,
 ) -> None:
     ordered = sorted(pairs)
-    axis.minimum = min(user for (user, _) in ordered)
-    axis.maximum = max(user for (user, _) in ordered)
+    # A declared bound can lie beyond the explicit map points (designspaceLib
+    # extrapolates the map there). Extending must never shrink the axis.
+    axis.minimum = min([user for (user, _) in ordered] + [float(axis.minimum)])
+    axis.maximum = max([user for (user, _) in ordered] + [float(axis.maximum)])
     if not had_map and _is_identity(ordered):
         # The axis was an identity and still is: minimum/maximum are the map.
         axis.map = []
@@ -918,13 +949,13 @@ def _extend_one_axis(
             trial = base + accepted + [(user, design)]
             if _map_decreases(trial):
                 result.skipped.append(
-                    f"{label}: {name} user {user:g}→{design:g} would make the map decrease"
+                    f"{label}: {name} user {user:g}->{design:g} would make the map decrease"
                 )
                 continue
             accepted.append((user, design))
 
     merged = base + accepted
-    extrapolated = False
+    invented: list[tuple[float, float]] = []
     covered_designs = [design for (_, design) in merged]
     ends: list[tuple[float, bool]] = []
     still_low = [design for design in missing if design < min(covered_designs) - EPSILON]
@@ -934,16 +965,26 @@ def _extend_one_axis(
     if still_high:
         ends.append((max(still_high), True))
     for target, high in ends:
-        user = _extrapolated_user(merged, target, high=high)
+        user = _clamped_to_registered_range(
+            axis.tag, _extrapolated_user(merged, target, high=high)
+        )
+        if any(abs(user - existing) < EPSILON for (existing, _) in merged):
+            # Clamped onto a point the map already has: there is no user
+            # coordinate left inside the registered range for this master.
+            result.skipped.append(
+                f"{label}: extrapolated {user:g}->{target:g} leaves the valid "
+                f"{axis.tag} range"
+            )
+            continue
         trial = merged + [(user, target)]
         if _map_decreases(trial):
             result.skipped.append(
-                f"{label}: extrapolated {user:g}→{target:g} would make the map decrease"
+                f"{label}: extrapolated {user:g}->{target:g} would make the map decrease"
             )
             continue
         merged = trial
         accepted.append((user, target))
-        extrapolated = True
+        invented.append((user, target))
 
     if not accepted:
         return
@@ -951,8 +992,9 @@ def _extend_one_axis(
     result.axes.append(label)
     for user, design in accepted:
         result.points.append((label, user, design))
-    if extrapolated:
+    if invented:
         result.extrapolated.append(label)
+        result.extrapolated_points.extend((label, user, design) for user, design in invented)
 
 
 def extend_axis_maps_to_masters_document(
@@ -1019,6 +1061,121 @@ def extend_axis_maps_to_masters(
     # The inverted-map repair can change the file without adding a point, so
     # the write follows the document, not just ``result.axes``.
     if _axis_snapshot(designspace) != before:
+        designspace.write(path)
+    return result
+
+
+@dataclass
+class AxisResetResult:
+    """What :func:`reset_axis_maps_to_design` changed."""
+
+    #: Axes whose map was dropped or whose range was rewritten.
+    axes: list[str] = field(default_factory=list)
+    #: The range each of them has now, as ``(axis name, minimum, default,
+    #: maximum)`` - design coordinates, which are the user coordinates too.
+    ranges: list[tuple[str, float, float, float]] = field(default_factory=list)
+
+    @property
+    def repaired(self) -> int:
+        return len(self.axes)
+
+    def summary(self) -> str:
+        """A single line for a processing log."""
+        if not self.axes:
+            return "no axis map to reset to design coordinates"
+        parts = "; ".join(
+            f"{name} {minimum:g}..{maximum:g} (default {default:g})"
+            for (name, minimum, default, maximum) in self.ranges
+        )
+        return f"axis map reset to the design coordinates on: {parts}"
+
+
+def reset_axis_maps_to_design_document(
+    designspace: DesignSpaceDocument,
+    tags: tuple[str, ...] = ("wdth",),
+) -> AxisResetResult:
+    """Make the named axes 1:1 with their design coordinates, in place.
+
+    A Displaay source sets the width axis in the numbers the designer drew at
+    - 75, 89, 100, 115, 130 - and those are the numbers the variable font has
+    to carry. glyphsLib does not use them: without an ``Axis Location`` it
+    derives the user location from the instance's OS/2 width class, which has
+    nine steps, so 89 becomes 87.5 and 130 becomes 125. The same source then
+    gets a different axis from every tool that does or does not keep that map.
+
+    The repair drops the map and spans the axis over the design locations of
+    the full masters and the instances. Nothing moves: sources and instances
+    are already in design space, only the label on each location changes.
+    The default keeps its design location. No width class and no
+    ``Axis Location`` is consulted - a source can get those wrong (a Standard
+    and a Wide instance of Reckless Italic both claim 50), and only the
+    coordinate the outlines were drawn at is evidence of the width.
+
+    This also takes care of what :func:`repair_inverted_axis_maps_document`
+    and :func:`extend_axis_maps_to_masters_document` would find on the same
+    axis, so run it before them; they still apply to every other axis.
+
+    :param designspace: The document to repair. Not written to disk - see
+        :func:`reset_axis_maps_to_design` for that.
+    :param tags: Tags of the axes to reset. Weight is deliberately not in the
+        default: a stem of 450 labelled 400 is a map the designer wants.
+    :returns: An :class:`AxisResetResult`.
+    """
+    result = AxisResetResult()
+    masters = master_sources(designspace)
+    for axis in designspace.axes:
+        if axis.tag not in tags or not axis.name:
+            continue
+        designs = [
+            float(source.getFullDesignLocation(designspace)[axis.name]) for source in masters
+        ]
+        if not designs:
+            continue
+        designs.extend(
+            float(value)
+            for instance in designspace.instances
+            for value in [(instance.designLocation or {}).get(axis.name)]
+            if isinstance(value, (int, float))
+        )
+        minimum = min(designs)
+        maximum = max(designs)
+        default = min(max(float(axis.map_forward(axis.default)), minimum), maximum)
+        unchanged = (
+            not axis.map
+            and abs(float(axis.minimum) - minimum) < EPSILON
+            and abs(float(axis.maximum) - maximum) < EPSILON
+            and abs(float(axis.default) - default) < EPSILON
+        )
+        if unchanged:
+            continue
+        axis.map = []
+        axis.minimum = minimum
+        axis.maximum = maximum
+        axis.default = default
+        label = _axis_label(axis)
+        result.axes.append(label)
+        result.ranges.append((label, minimum, default, maximum))
+    if result.axes:
+        LOGGER.warning("Reset axis map(s) to the design coordinates on: %s", result.axes)
+    return result
+
+
+def reset_axis_maps_to_design(
+    designspace_path: str | os.PathLike[str],
+    tags: tuple[str, ...] = ("wdth",),
+) -> AxisResetResult:
+    """Reset axis maps in a designspace file to the design coordinates.
+
+    The file is only written when something was actually changed.
+
+    :param designspace_path: Path to the .designspace file.
+    :param tags: See :func:`reset_axis_maps_to_design_document`.
+    :returns: An :class:`AxisResetResult`.
+    """
+    path = os.fspath(designspace_path)
+    designspace = DesignSpaceDocument.fromfile(path)
+    result = reset_axis_maps_to_design_document(designspace, tags)
+    if result.axes:
         designspace.write(path)
     return result
 
@@ -1214,6 +1371,7 @@ def repair_inverted_axis_maps(
 __all__ = [
     "AxisMapResult",
     "AxisRangeResult",
+    "AxisResetResult",
     "EPSILON",
     "DeduplicateResult",
     "DefaultMasterResult",
@@ -1229,4 +1387,6 @@ __all__ = [
     "repair_collapsing_axis_maps_document",
     "repair_inverted_axis_maps",
     "repair_inverted_axis_maps_document",
+    "reset_axis_maps_to_design",
+    "reset_axis_maps_to_design_document",
 ]

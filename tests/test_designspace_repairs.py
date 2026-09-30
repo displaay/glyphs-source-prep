@@ -6,6 +6,7 @@ import pytest
 from fontTools.designspaceLib import (
     AxisDescriptor,
     DesignSpaceDocument,
+    InstanceDescriptor,
     SourceDescriptor,
 )
 
@@ -19,6 +20,8 @@ from glyphs_source_prep import (
     repair_collapsing_axis_maps_document,
     repair_inverted_axis_maps,
     repair_inverted_axis_maps_document,
+    reset_axis_maps_to_design,
+    reset_axis_maps_to_design_document,
 )
 
 
@@ -467,8 +470,32 @@ class TestExtendAxisMapsToMasters:
         assert result.skipped == []
 
     def test_extrapolates_along_the_end_segment_when_no_font_is_available(self):
-        # (400->80), (900->220), master at design 400. Slope 0.28 continues
-        # to user 900 + (400 - 220) / 0.28, not the constant offset 1080.
+        # (400->80), (600->220), master at design 290. Slope 0.7 continues to
+        # user 600 + (290 - 220) / 0.7, not the constant offset 670.
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Weight",
+                    tag="wght",
+                    minimum=400,
+                    default=400,
+                    maximum=600,
+                    mapping=[(400, 80), (600, 220)],
+                )
+            ],
+            [make_source("Black", {"Weight": 290})],
+        )
+        result = extend_axis_maps_to_masters_document(doc, font=None)
+        assert result.axes == ["Weight"]
+        assert result.extrapolated == ["Weight"]
+        user, design = result.points[0][1], result.points[0][2]
+        assert design == 290.0
+        assert user == pytest.approx(700.0)
+        assert float(doc.axes[0].maximum) == pytest.approx(700.0)
+        assert "(extrapolated)" in result.summary()
+
+    def test_an_extrapolated_weight_stays_inside_the_registered_range(self):
+        # The slope would put the master at user 1542; wght ends at 1000.
         doc = make_doc(
             [
                 make_axis(
@@ -483,13 +510,74 @@ class TestExtendAxisMapsToMasters:
             [make_source("Black", {"Weight": 400})],
         )
         result = extend_axis_maps_to_masters_document(doc, font=None)
-        assert result.axes == ["Weight"]
-        assert result.extrapolated == ["Weight"]
-        user, design = result.points[0][1], result.points[0][2]
-        assert design == 400.0
-        assert user == pytest.approx(1542.857142)
-        assert float(doc.axes[0].maximum) == pytest.approx(1542.857142)
-        assert "(extrapolated)" in result.summary()
+        assert result.points == [("Weight", 1000.0, 400.0)]
+        assert float(doc.axes[0].maximum) == 1000.0
+
+    def test_a_weight_map_that_already_ends_at_1000_is_not_extended(self):
+        doc = make_doc(
+            [
+                make_axis(
+                    name="Weight",
+                    tag="wght",
+                    minimum=400,
+                    default=400,
+                    maximum=1000,
+                    mapping=[(400, 80), (1000, 220)],
+                )
+            ],
+            [make_source("Black", {"Weight": 400})],
+        )
+        before = list(doc.axes[0].map)
+        result = extend_axis_maps_to_masters_document(doc, font=None)
+        assert result.axes == []
+        assert list(doc.axes[0].map) == before
+        assert "leaves the valid wght range" in result.skipped[0]
+
+    def test_only_the_extrapolated_point_is_marked(self):
+        # Wide comes from an inactive instance, Extended from the slope.
+        doc = _width_doc(
+            [(75, 75), (87.5, 89), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Wide", {"Width": 115}),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        result = extend_axis_maps_to_masters_document(
+            doc, _Font([_Instance(115, 6, name="Wide")])
+        )
+        assert result.points[0] == ("Width", 112.5, 115.0)
+        assert result.extrapolated_points == [result.points[1]]
+        assert result.summary().count("(extrapolated)") == 1
+        assert "112.5->115," in result.summary()
+
+    def test_the_summary_is_ascii(self):
+        doc = _width_doc(
+            [(75, 75), (87.5, 89), (100, 100)],
+            [make_source("Extended", {"Width": 130})],
+        )
+        result = extend_axis_maps_to_masters_document(doc, font=None)
+        assert result.axes == ["Width"]
+        result.summary().encode("ascii")
+        for line in result.skipped:
+            line.encode("ascii")
+
+    def test_declared_bounds_outside_the_map_keys_are_preserved(self):
+        # minimum 50 lies below the first map key: extending must not shrink it.
+        doc = _width_doc(
+            [(75, 75), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+            minimum=50,
+        )
+        result = extend_axis_maps_to_masters_document(
+            doc, _Font([_Instance(130, 7, name="Extended")])
+        )
+        assert result.points == [("Width", 125.0, 130.0)]
+        assert float(doc.axes[0].minimum) == 50.0
+        assert float(doc.axes[0].maximum) == 125.0
 
     def test_a_map_that_already_covers_masters_is_untouched(self, tmp_path):
         doc = _width_doc(
@@ -708,3 +796,149 @@ class TestRepairInvertedAxisMaps:
             (100.0, 100.0),
             (125.0, 150.0),
         ]
+
+
+def _instance_at(name, location):
+    instance = InstanceDescriptor()
+    instance.name = name
+    instance.designLocation = location
+    return instance
+
+
+class TestResetAxisMapsToDesign:
+    def test_a_width_class_map_gives_way_to_the_design_coordinates(self):
+        # Greed: every instance exports, glyphsLib labels 89 as 87.5 and 130
+        # as 125. The designer's numbers are 75..130.
+        doc = _width_doc(
+            [(75, 75), (87.5, 89), (100, 100), (112.5, 115), (125, 130)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+            maximum=125,
+        )
+        result = reset_axis_maps_to_design_document(doc)
+        width = doc.axes[0]
+        assert result.axes == ["Width"]
+        assert result.ranges == [("Width", 75.0, 75.0, 130.0)]
+        assert list(width.map) == []
+        assert (width.minimum, width.default, width.maximum) == (75.0, 75.0, 130.0)
+        result.summary().encode("ascii")
+
+    def test_a_truncated_map_reaches_the_masters_without_the_source(self):
+        # The wide instances are switched off: the map stops at 100 and the
+        # Extended master is outside it. No font is needed to put it back.
+        doc = _width_doc(
+            [(75, 75), (87.5, 89), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+        )
+        reset_axis_maps_to_design_document(doc)
+        assert float(doc.axes[0].maximum) == 130.0
+        assert extend_axis_maps_to_masters_document(doc, font=None).axes == []
+
+    def test_the_default_keeps_its_design_location(self):
+        doc = _width_doc(
+            [(75, 75), (100, 103), (125, 130)],
+            [
+                make_source("Condensed", {"Width": 75}),
+                make_source("Normal", {"Width": 103}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+            default=100,
+            maximum=125,
+        )
+        reset_axis_maps_to_design_document(doc)
+        assert float(doc.axes[0].default) == 103.0
+
+    def test_an_inverted_width_map_is_replaced_not_pruned(self):
+        doc = make_doc(
+            [_reckless_width()],
+            [
+                make_source("Condensed", {"Width": 50}, copy_info=True),
+                make_source("Standard", {"Width": 100}),
+                make_source("Wide", {"Width": 150}),
+            ],
+        )
+        designs = [50.0, 150.0]
+        result = reset_axis_maps_to_design_document(doc)
+        width = doc.axes[0]
+        assert result.axes == ["Width"]
+        assert list(width.map) == []
+        assert (float(width.minimum), float(width.maximum)) == (designs[0], designs[-1])
+        assert repair_inverted_axis_maps_document(doc).axes == []
+
+    def test_an_instance_past_the_masters_stays_inside_the_axis(self):
+        doc = _width_doc(
+            [(75, 75), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Standard", {"Width": 100}),
+            ],
+        )
+        doc.addInstance(_instance_at("Wide", {"Width": 110}))
+        reset_axis_maps_to_design_document(doc)
+        assert float(doc.axes[0].maximum) == 110.0
+
+    def test_a_brace_layer_does_not_set_the_range(self):
+        doc = _width_doc(
+            [(75, 75), (100, 100)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Standard", {"Width": 100}),
+                make_source("Brace", {"Width": 140}, layer="{140}"),
+            ],
+        )
+        reset_axis_maps_to_design_document(doc)
+        assert float(doc.axes[0].maximum) == 100.0
+
+    def test_weight_is_left_alone_by_default(self):
+        weight = make_axis(mapping=[(100, 40), (400, 90), (900, 220)])
+        doc = make_doc(
+            [weight],
+            [make_source("Thin", {"Weight": 40}), make_source("Black", {"Weight": 220})],
+        )
+        assert reset_axis_maps_to_design_document(doc).axes == []
+        assert list(doc.axes[0].map) == [(100, 40), (400, 90), (900, 220)]
+
+    def test_a_named_tag_is_reset(self):
+        weight = make_axis(mapping=[(100, 40), (400, 90), (900, 220)])
+        doc = make_doc(
+            [weight],
+            [make_source("Thin", {"Weight": 40}), make_source("Black", {"Weight": 220})],
+        )
+        result = reset_axis_maps_to_design_document(doc, tags=("wght",))
+        assert result.ranges == [("Weight", 40.0, 90.0, 220.0)]
+
+    def test_an_axis_that_is_already_one_to_one_is_untouched(self):
+        doc = _width_doc(
+            None,
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Standard", {"Width": 100}),
+            ],
+        )
+        result = reset_axis_maps_to_design_document(doc)
+        assert result.axes == []
+        assert result.summary() == "no axis map to reset to design coordinates"
+
+    def test_the_file_form_writes_only_a_reset(self, tmp_path):
+        path = tmp_path / "Family.designspace"
+        doc = _width_doc(
+            [(75, 75), (125, 130)],
+            [
+                make_source("Condensed", {"Width": 75}, copy_info=True),
+                make_source("Extended", {"Width": 130}),
+            ],
+            maximum=125,
+        )
+        doc.write(path)
+        assert reset_axis_maps_to_design(path).axes == ["Width"]
+        written = DesignSpaceDocument.fromfile(path)
+        assert list(written.axes[0].map) == []
+        assert float(written.axes[0].maximum) == 130.0
+        stamp = path.stat().st_mtime_ns
+        assert reset_axis_maps_to_design(path).axes == []
+        assert path.stat().st_mtime_ns == stamp
