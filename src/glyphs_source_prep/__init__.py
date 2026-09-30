@@ -51,15 +51,24 @@ from .brace_layers import (
 )
 from .designspace import (
     AxisMapResult,
+    AxisRangeResult,
+    AxisResetResult,
     DeduplicateResult,
     DefaultMasterResult,
+    InvertedAxisMapResult,
     deduplicate_designspace_document,
     deduplicate_designspace_sources,
     ensure_default_master_document,
     ensure_designspace_default_master,
+    extend_axis_maps_to_masters,
+    extend_axis_maps_to_masters_document,
     master_sources,
     repair_collapsing_axis_maps,
     repair_collapsing_axis_maps_document,
+    repair_inverted_axis_maps,
+    repair_inverted_axis_maps_document,
+    reset_axis_maps_to_design,
+    reset_axis_maps_to_design_document,
 )
 from .encoding import (
     SourceDecodeResult,
@@ -83,14 +92,17 @@ from .sources import (
     load_source,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "BackgroundCleanupResult",
     "BraceLayerAlignResult",
     "AxisMapResult",
+    "AxisRangeResult",
+    "AxisResetResult",
     "DeduplicateResult",
     "DefaultMasterResult",
+    "InvertedAxisMapResult",
     "KerningInheritResult",
     "PathOrderResult",
     "SourceDecodeResult",
@@ -106,6 +118,8 @@ __all__ = [
     "deduplicate_designspace_sources",
     "ensure_default_master_document",
     "ensure_designspace_default_master",
+    "extend_axis_maps_to_masters",
+    "extend_axis_maps_to_masters_document",
     "drop_dangling_background_components",
     "is_brace_layer",
     "inherit_empty_master_kerning",
@@ -117,6 +131,10 @@ __all__ = [
     "reorder_master_paths_to_variable_origin",
     "repair_collapsing_axis_maps",
     "repair_collapsing_axis_maps_document",
+    "repair_inverted_axis_maps",
+    "repair_inverted_axis_maps_document",
+    "reset_axis_maps_to_design",
+    "reset_axis_maps_to_design_document",
     "unambiguous_order",
     "variable_font_origin_master_id",
 ]

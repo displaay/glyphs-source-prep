@@ -61,9 +61,24 @@ and after the designspace has been generated:
 from glyphs_source_prep import (
     deduplicate_designspace_document,
     ensure_default_master_document,
+    extend_axis_maps_to_masters_document,
     inherit_empty_master_kerning_document,
     repair_collapsing_axis_maps_document,
+    reset_axis_maps_to_design_document,
 )
+
+# First: the width axis carries the numbers the designer drew at, not the
+# nine OS/2 width classes glyphsLib derives a map from. After this the axis
+# is 1:1 and the repairs below have nothing left to find on it.
+report = reset_axis_maps_to_design_document(designspace)
+
+# Before the default-master repair. That one fills an unreachable master
+# with an identity point, and the inactive instance's user location would
+# then conflict with it and be dropped. Pass the Glyphs source so those
+# instances supply the user locations; without it, a master past the end
+# of the map is reached by extrapolation. A decreasing map is repaired
+# first, by repair_inverted_axis_maps_document.
+report = extend_axis_maps_to_masters_document(designspace, font)
 
 for repair in (
     deduplicate_designspace_document,
@@ -221,6 +236,99 @@ onto the endpoint it collapsed against and drops the now-redundant remap
 entry. Every master stays where it was — only the label on the default
 location changes.
 
+### An axis map that decreases
+
+glyphsLib merges per-instance Axis Locations last-write-wins, so two
+conflicting instances can emit a crossed map. Instantiator requires
+`map_forward(minimum) <= map_forward(default) <= map_forward(maximum)` and
+raises when that triple decreases. Reckless Italic Width was
+`(50→150), (75→50), (100→100), (125→150)`.
+
+`repair_inverted_axis_maps_document(designspace)` keeps the longest
+non-decreasing run by design location, which drops the minority conflicting
+entries. The Reckless map becomes `(75→50), (100→100), (125→150)`. The
+default's own entry is never the one dropped: an entry that conflicts with it
+goes first, so the default stays on the master it was on. A flat
+run is left for `repair_collapsing_axis_maps_document`. The file form is
+`repair_inverted_axis_maps(path)`.
+
+The axis range follows the entries that are kept, so a dropped end entry
+takes its end of the range with it (Reckless goes from 50 to 75). A declared
+bound beyond an end entry that survives is left where it was.
+
+`extend_axis_maps_to_masters_document` calls
+`repair_inverted_axis_maps_document` before it adds points, so a caller that
+only extends still gets a monotonic map. Its report names those axes in
+`inverted` and counts them in `repaired`, because the document changed even
+when no point was added. Calling `repair_inverted_axis_maps` again changes
+nothing.
+
+### Masters past the end of the axis
+
+glyphsLib builds a non-identity axis map from the instances that are switched
+on for export, and discards the master mapping once that instance map exists.
+Switching the wide instances off leaves their masters in the file and stops
+the map at the widest instance that still exports. `splitInterpolable` then
+drops every master whose user location falls outside that range, and a
+Standard instance interpolates as if it were Condensed.
+
+`extend_axis_maps_to_masters_document(designspace, font)` adds the missing map
+points from the instances that are switched off (`exports` or `active`). A
+width stored as `7` is OS/2 width class 7, user location 125, not user
+location 7. The axis default and the instance locations stay as they are.
+Run it before `ensure_default_master_document`: that repair inserts an
+identity point for an unreachable master, and the two points then disagree.
+
+An axis with no map is 1:1 with the design coordinates and stays 1:1: its
+range is widened to the master and no width or weight class is mixed into it.
+An instance beyond the outermost master adds no point, so the axis always ends
+on a master. A discrete axis is skipped.
+
+An `Axis Mappings` parameter is the designer's own map and is left alone.
+A decreasing map is handled first by `repair_inverted_axis_maps_document`,
+which this function calls; a point added here is skipped when that point
+itself would make the map decrease. A master that no
+instance accounts for is reached by continuing the slope of the end segment;
+`extrapolated` names the axes where that happened and `extrapolated_points`
+the points themselves, because the user coordinate was invented rather than
+read from the source. An invented coordinate stays inside the range the
+OpenType axis registry allows (`wght` ends at 1000).
+
+> No upstream issue yet. glyphsLib's `update_mapping_from_instances` skips
+> inactive instances, and the master locations are not put back. Delete this
+> once a master stays in the interpolation when the instances at its end of
+> the axis are switched off.
+
+### A width axis relabelled in width classes
+
+A Displaay source sets the width axis in the numbers the designer drew at —
+Greed is 75, 89, 100, 115, 130. Without an `Axis Location`, glyphsLib takes
+the user location of an instance from its OS/2 width class instead, and the
+class has nine steps: 89 becomes 87.5, 115 becomes 112.5 and 130 becomes 125.
+A tool that keeps that map ships a variable font whose `wdth` ends at 125, a
+tool that drops it ships one that ends at 130, and the same `font-stretch`
+value selects a different design in each.
+
+`reset_axis_maps_to_design_document(designspace)` drops the map on `wdth` and
+spans the axis over the design locations of the full masters and the
+instances. Nothing moves — sources and instances are already in design space —
+only the label on each location changes. What addresses the axis in user
+coordinates is carried over through the old map: an instance `userLocation`
+becomes the design location it resolved to, and axis labels, location labels
+and variable-font subsets are restated. Neither the width class nor an
+`Axis Location` is read: a source can get both wrong, and the coordinate the
+outlines were drawn at is the only evidence of the width. OS/2 `usWidthClass`
+is a separate matter and still has to be one of the nine classes.
+
+Run it first. A 1:1 axis already contains every master and cannot decrease,
+so the two repairs above find nothing on it and go on handling the other
+axes. `tags` names the axes to reset; weight is not in the default, because a
+stem of 450 labelled 400 is a map the designer wants. The file form is
+`reset_axis_maps_to_design(path)`.
+
+This is a convention, not a glyphsLib bug, so there is no upstream issue to
+wait for.
+
 ### A mono master with no kerning
 
 A Glyphs source usually holds one set of kerning pairs, drawn on the
@@ -302,6 +410,14 @@ none is a permanent difference of opinion — so check the issues before assumin
 a fix is still needed, and drop the ones that have landed. The exception is
 `encoding`, which works around no bug: it stays as long as sources written by
 older Glyphs versions do.
+
+`extend_axis_maps_to_masters` is the other exception: no glyphsLib issue is
+filed for it yet. It stays until glyphsLib keeps a master whose instances are
+switched off for export.
+
+`reset_axis_maps_to_design` is not waiting for anything. It states which
+numbers a Displaay width axis carries and stays as long as that convention
+does.
 
 The tests are the useful part to keep either way: they are small, they assert
 the *behaviour* rather than the workaround, and they double as the reproduction
