@@ -77,3 +77,29 @@ class TestLoadSource:
         result = load_source(MINIMAL_V3)
         assert result.conversion is not None
         assert not result.converted
+
+
+HOI_V4 = """{
+.formatVersion = 4;
+familyName = Test;
+axes = ({name = Weight; tag = wght;});
+fontMaster = ({id = m01; name = Regular; axesValues = (100);});
+glyphs = ({glyphname = A; layers = ({layerId = m01; width = 500;
+shapes = ({closed = 1; nodes = ((0,0,l,{hoi = {wght = {ip = (1,2);};};}),(10,0,l),(10,10,l));});});});
+unitsPerEm = 1000;
+}
+"""
+
+
+class TestAcceptHOI:
+    def test_a_glyphs_4_source_with_hoi_is_refused_by_default(self):
+        from glyphs4to3 import Glyphs4Error
+
+        with pytest.raises(Glyphs4Error):
+            load_source(HOI_V4)
+
+    def test_it_is_read_when_the_caller_bakes_it(self):
+        from glyphs_source_prep import find_hoi
+
+        result = load_source(HOI_V4, accept_hoi=True)
+        assert find_hoi(result.font) == {"A": {"wght"}}
