@@ -75,6 +75,12 @@ from .encoding import (
     decode_source_bytes,
     decode_source_text,
 )
+from .hoi import (
+    HOIBakeResult,
+    HOIError,
+    bake_hoi,
+    find_hoi,
+)
 from .kerning import (
     KerningInheritResult,
     inherit_empty_master_kerning,
@@ -102,6 +108,8 @@ __all__ = [
     "AxisResetResult",
     "DeduplicateResult",
     "DefaultMasterResult",
+    "HOIBakeResult",
+    "HOIError",
     "InvertedAxisMapResult",
     "KerningInheritResult",
     "PathOrderResult",
@@ -109,6 +117,8 @@ __all__ = [
     "SourceLoadResult",
     "__version__",
     "align_brace_layers_to_variable_origin",
+    "bake_hoi",
+    "find_hoi",
     "brace_coordinates",
     "conflicting_locations",
     "effective_location",

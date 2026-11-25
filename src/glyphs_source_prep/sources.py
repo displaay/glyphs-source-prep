@@ -68,7 +68,9 @@ class SourceLoadResult:
         return lines
 
 
-def load_source(data: bytes | str, *, origin: Any = None) -> SourceLoadResult:
+def load_source(
+    data: bytes | str, *, origin: Any = None, accept_hoi: bool = False
+) -> SourceLoadResult:
     """Decode and parse a .glyphs source.
 
     :param data: The file's bytes, or its text when the caller has already
@@ -78,6 +80,12 @@ def load_source(data: bytes | str, *, origin: Any = None) -> SourceLoadResult:
     :param origin: The path the source came from, recorded on the returned font
         as ``filepath`` the way ``GSFont(path)`` would. Optional - the
         Customizer is handed the body of a request and has no path.
+    :param accept_hoi: Read a Glyphs 4 source with higher-order interpolation
+        instead of refusing it. The HOI stays on the nodes, as it does in a
+        format 3 file Glyphs 4 wrote, and glyphsLib ignores it - so pass True
+        only when :func:`~glyphs_source_prep.hoi.bake_hoi` runs before the
+        build. A format 3 source with HOI is never refused; use
+        :func:`~glyphs_source_prep.hoi.find_hoi` to notice it.
     :returns: :class:`SourceLoadResult`.
     :raises glyphs4to3.Glyphs4Error: The source uses a Glyphs 4 construct with
         no format 3 equivalent, or a format version newer than 4. Callers that
@@ -97,7 +105,8 @@ def load_source(data: bytes | str, *, origin: Any = None) -> SourceLoadResult:
     else:
         decoded = SourceDecodeResult(text=data, rewritten=False)
 
-    font, report = loads_with_report(decoded.text)
+    allow = ("nodeAttr.hoi",) if accept_hoi else ()
+    font, report = loads_with_report(decoded.text, allow=allow)
     if origin is not None:
         # GSFont.__init__ records filepath after parsing; the parser itself
         # already wires master.font. Setting it keeps this indistinguishable
