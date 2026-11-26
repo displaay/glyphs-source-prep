@@ -247,7 +247,18 @@ def test_an_existing_source_location_keeps_its_master():
     font = make_font({"a": glyph_with({"ip": [150, 50]}, upper_dx=100), "b": other})
     bake_hoi(font)
     assert synthesized(font, "a", [100, 25]).associatedMasterId == "m02"
-    assert synthesized(font, "a", [900, 25]).associatedMasterId == "m01"
+
+
+def test_a_new_location_hangs_off_the_nearest_master():
+    """Smart and corner components come from the associated master, so the
+    Black column must not be tied to Thin (equal distance: the first master)."""
+    font = make_font({"a": glyph_with({"ip": [150, 50]}, upper_dx=100)})
+    bake_hoi(font)
+    assert synthesized(font, "a", [100, 25]).associatedMasterId == "m01"
+    assert synthesized(font, "a", [900, 25]).associatedMasterId == "m02"
+    font = make_font({"a": glyph_with({"ip": [150, 50]}, upper_dx=100)}, instances=((900, 40),))
+    bake_hoi(font)
+    assert synthesized(font, "a", [900, 40]).associatedMasterId == "m04"
 
 
 def test_hoi_is_removed_once_baked_so_a_second_run_does_nothing():
@@ -315,6 +326,35 @@ def test_hoi_along_two_axes_is_refused():
     glyph = glyph_with({"ip": [150, 50]}, upper_dx=100)
     glyph[0]["shapes"][0]["nodes"][1] = [200, 0, "l", {"hoi": {"wght": {"ip": [1, 2]}}}]
     assert "more than one axis" in refused(make_font({"a": glyph}))
+
+
+def test_a_glyph_with_alternate_layers_is_refused():
+    """glyphsLib fills missing bracket layers with the master layers - HOI and
+    all, but without the baked intermediates."""
+    glyph = glyph_with({"ip": [150, 50]}, upper_dx=100)
+    glyph.append(
+        {
+            "layerId": "bracket-m02",
+            "associatedMasterId": "m02",
+            "attr": {"axisRules": [{"min": 600}]},
+            "name": "Alt",
+            "width": 500,
+            "shapes": [{"closed": 1, "nodes": square()}],
+        }
+    )
+    assert "alternate (bracket) layers" in refused(make_font({"a": glyph}))
+
+
+@pytest.mark.parametrize("hoi", [1, "x", {"slnt": 1}, {"slnt": {"ip": {"x": 1}}}])
+def test_malformed_hoi_is_an_hoi_error(hoi):
+    """Never a bare TypeError: callers map HOIError to a validation message."""
+    glyph = glyph_with(None, upper_dx=100)
+    for master_layer in glyph[:2]:
+        master_layer["shapes"][0]["nodes"][0] = [100, 0, "l", {"hoi": hoi}]
+    font = make_font({"a": glyph})
+    assert find_hoi(font)
+    assert "a" in refused(font)
+    assert find_hoi(font)  # nothing was changed
 
 
 def test_a_curve_needing_too_many_layers_is_refused():
@@ -423,9 +463,16 @@ def test_hints_and_component_properties_are_kept():
         with_extras(layer("m03", square(dx=100)), upper_component),
         with_extras(layer("m04", square(dx=100)), upper_component),
     ]
+    for master_layer in a:
+        master_layer["attr"] = {"color": 1}
+        first = master_layer["shapes"][0]["nodes"][1]
+        master_layer["shapes"][0]["nodes"][1] = [*first[:3], {"name": "corner"}]
     font = make_font({"a": a, "b": glyph_with(None)})
     bake_hoi(font)
     baked = synthesized(font, "a", [100, 25])
+    assert baked.attributes["color"] == 1
+    assert baked.paths[0].nodes[1].userData["name"] == "corner"
+    assert "hoi" not in (baked.paths[0].nodes[0]._userData or {})
     assert len(baked.hints) == 1 and baked.hints[0].name == "_corner.x"
     (comp,) = baked.components
     assert comp.anchor == "top"

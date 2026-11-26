@@ -105,8 +105,12 @@ def load_source(
     else:
         decoded = SourceDecodeResult(text=data, rewritten=False)
 
-    allow = ("nodeAttr.hoi",) if accept_hoi else ()
-    font, report = loads_with_report(decoded.text, allow=allow)
+    if accept_hoi:
+        # allow= needs glyphs4to3 0.5.0; the default call stays the one every
+        # release understands.
+        font, report = loads_with_report(decoded.text, allow=("nodeAttr.hoi",))
+    else:
+        font, report = loads_with_report(decoded.text)
     if origin is not None:
         # GSFont.__init__ records filepath after parsing; the parser itself
         # already wires master.font. Setting it keeps this indistinguishable

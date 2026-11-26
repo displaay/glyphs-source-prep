@@ -375,6 +375,10 @@ an optional dependency imported when the function runs — install
 genuinely differs: staging a converted copy on disk for fontmake to read, or
 translating the conversion error into an application's own validation error.
 
+A format 4 source with higher-order interpolation is refused unless the caller
+bakes it (below): `load_source(data, accept_hoi=True)` then reads it, with the
+`hoi` left on the nodes for `bake_hoi()`. That needs glyphs4to3 0.5.0 or newer.
+
 ### A source that is not valid UTF-8
 
 Glyphs.app has written UTF-8 for years, but a source that started life in an
@@ -401,6 +405,46 @@ and resumes.
 > Not a glyphsLib bug and no upstream issue: by the time glyphsLib sees a
 > source it is already `str`. It lives here because it is the same class of
 > problem one step earlier, and both tools need it at the same point.
+
+### Glyphs 4 higher-order interpolation
+
+Glyphs 4 can make a node follow a curve along one axis instead of a straight
+line (HOI, `hoi` on the lower node of the span). glyphsLib reads it into the
+node's `userData` and interpolates in straight lines, so the outlines come out
+wrong with no warning — on Gellix Futt by up to 50 units half way along the
+axis. Glyphs 4 writes `hoi` into format 3 files as well, so this is not only
+a format 4 problem.
+
+```python
+from glyphs_source_prep import HOIError, bake_hoi, find_hoi
+
+try:
+    result = bake_hoi(font, extra_locations=[12.5])   # in place, before the build
+except HOIError as error:                              # names every glyph and why
+    raise MyValidationError(str(error))
+log.info(result.summary())
+```
+
+`bake_hoi` replaces the HOI with intermediate (brace) layers along the axis,
+in every column of the glyph (a master pair, or a brace layer pair): at each
+exported static instance and `extra_locations` value, so the statics are
+exact, then wherever a straight line is still more than `tolerance` (1 unit)
+from the curve. The curve formulas were reverse-engineered from Glyphs 4.2 and
+are in the module docstring. A new location is associated with its nearest
+master, which is where glyphsLib takes smart and corner components from.
+
+It refuses — `HOIError`, font untouched — rather than guess: HOI on more than
+one axis, on an upper layer or on a glyph with alternate (bracket) layers, a
+column without a pair of layers, two layers at one location, an `hoi` it
+cannot read, and a curve that needs more than `max_intermediate` halvings
+(e.g. a node swinging almost a full turn). `find_hoi(font)` is for a caller
+that does not bake: a non-empty result means the font will not come out as
+Glyphs draws it.
+
+> No upstream issue yet: googlefonts/glyphsLib#1189 (Glyphs 4 sources) is
+> where the maintainers point Glyphs 4 work to fontc. The module depends on
+> nothing else in this package, so it can move to glyphsLib's
+> `builder/transformations` as it is.
 
 ## When to delete each fix
 
