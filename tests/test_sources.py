@@ -85,7 +85,8 @@ familyName = Test;
 axes = ({name = Weight; tag = wght;});
 fontMaster = ({id = m01; name = Regular; axesValues = (100);});
 glyphs = ({glyphname = A; layers = ({layerId = m01; width = 500;
-shapes = ({closed = 1; nodes = ((0,0,l,{hoi = {wght = {ip = (1,2);};};}),(10,0,l),(10,10,l));});});});
+shapes = ({closed = 1; nodes = (
+(0,0,l,{hoi = {wght = {ip = (1,2);};};}),(10,0,l),(10,10,l));});});});
 unitsPerEm = 1000;
 }
 """

@@ -75,7 +75,7 @@ import copy
 import logging
 import math
 import uuid
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -94,11 +94,15 @@ MAX_REPORTED_GLYPHS = 10
 #: curve Glyphs draws, between two synthesized layers.
 DEFAULT_TOLERANCE = 1.0
 
-#: Default cap on the intermediate layers synthesized per column. Gellix Futt
-#: needs 7 for 1 unit; a curve that needs more than this is extreme (a node
-#: swinging almost a full turn round its centre) and is refused rather than
-#: baked into hundreds of masters.
+#: Default cap on the layers the error-driven halving may add per column, on
+#: top of the ones at instance and extra locations (those are never capped).
+#: Gellix Futt needs 7 in all for 1 unit; a curve that needs more than this is
+#: extreme (a node swinging almost a full turn round its centre) and is refused
+#: rather than baked into hundreds of masters.
 DEFAULT_MAX_INTERMEDIATE = 16
+
+#: The axis tag :func:`find_hoi` reports for an ``hoi`` that is not a mapping.
+UNREADABLE_AXIS = "?"
 
 #: Points sampled inside each span to measure the approximation error.
 _ERROR_SAMPLES = 8
@@ -190,7 +194,9 @@ def find_hoi(font: GSFont) -> dict[str, set[str]]:
     masters, intermediate and alternate layers; a stale ``hoi`` on a backup
     layer does not.
 
-    :returns: ``{glyph name: {axis tag, ...}}``, only glyphs with HOI.
+    :returns: ``{glyph name: {axis tag, ...}}``, only glyphs with HOI. An
+        ``hoi`` that is not a mapping of axis tags is reported under
+        :data:`UNREADABLE_AXIS`.
     """
     found: dict[str, set[str]] = {}
     master_ids = {str(m.id) for m in font.masters}
@@ -202,7 +208,12 @@ def find_hoi(font: GSFont) -> dict[str, set[str]]:
                 for node in path.nodes:
                     hoi = node_hoi(node)
                     if hoi:
-                        found.setdefault(str(glyph.name), set()).update(str(k) for k in hoi)
+                        tags = (
+                            {str(k) for k in hoi}
+                            if isinstance(hoi, Mapping)
+                            else {UNREADABLE_AXIS}
+                        )
+                        found.setdefault(str(glyph.name), set()).update(tags)
     return found
 
 
@@ -279,7 +290,9 @@ def _rotation(p0: Point, p1: Point, center: Point, direction: str | None) -> Cub
     return (p0, c1, c2, p1)
 
 
-def node_cubic(p0: Point, p1: Point, hoi: dict[str, Any] | None, center: Point | None) -> Cubic:
+def node_cubic(
+    p0: Point, p1: Point, hoi: Mapping[str, Any] | None, center: Point | None
+) -> Cubic:
     """The curve one node follows between the lower and the upper layer.
 
     :param hoi: The node's HOI description for this axis, or None.
@@ -294,7 +307,7 @@ def node_cubic(p0: Point, p1: Point, hoi: dict[str, Any] | None, center: Point |
         return (p0, _lerp(p0, q, 2 / 3), _lerp(p1, q, 2 / 3), p1)
     if "rc" in hoi:
         rc = hoi["rc"]
-        if isinstance(rc, str) and rc.strip().strip('"') == "auto":
+        if _is_auto(rc):
             if center is None:
                 raise ValueError("rotation centre 'auto' without a path to take it from")
             rotation_center = center
@@ -316,6 +329,10 @@ def node_cubic(p0: Point, p1: Point, hoi: dict[str, Any] | None, center: Point |
         c2 = _add(_sub(p1, _mul(d, tu)), _mul(_rot_cw(_mul(d, -1)), au))
         return (p0, c1, c2, p1)
     raise ValueError(f"unknown HOI kind: {sorted(hoi)}")
+
+
+def _is_auto(rc: Any) -> bool:
+    return isinstance(rc, str) and rc.strip().strip('"') == "auto"
 
 
 def cubic_point(cubic: Cubic, t: float) -> Point:
@@ -473,15 +490,20 @@ def _glyph_columns(
 ) -> tuple[list[_Column], tuple[float, float]] | None:
     """Pair the glyph's sources into columns and compute every node's curve."""
     name = str(glyph.name)
-    for layer in glyph.layers:
-        if _is_bracket(layer) and any(
-            node_hoi(n) for p in _layer_paths(layer) for n in p.nodes
-        ):
-            problems.append(f"{name}: HOI on an alternate (bracket) layer")
-            return None
+    if any(_is_bracket(layer) for layer in glyph.layers):
+        # glyphsLib builds the alternate glyph from the bracket layers plus the
+        # master layers where a bracket one is missing - with the HOI on them,
+        # but none of the intermediate layers baked here
+        problems.append(f"{name}: HOI on a glyph with alternate (bracket) layers")
+        return None
 
+    try:
+        sources = list(_source_layers(glyph, master_locations, axis_count))
+    except (TypeError, ValueError) as error:
+        problems.append(f"{name}: unreadable brace layer coordinates: {error}")
+        return None
     by_key: dict[tuple[float, ...], dict[float, Any]] = {}
-    for layer, location in _source_layers(glyph, master_locations, axis_count):
+    for layer, location in sources:
         key = location[:axis_index] + location[axis_index + 1 :]
         column = by_key.setdefault(key, {})
         if location[axis_index] in column:
@@ -526,20 +548,25 @@ def _glyph_columns(
             node_cubics: list[Cubic] = []
             for lower_node, upper_node in zip(lower_path.nodes, upper_path.nodes, strict=True):
                 hoi_all = node_hoi(lower_node) or {}
+                if not isinstance(hoi_all, Mapping):
+                    problems.append(f"{name}: unreadable HOI {hoi_all!r}")
+                    return None
                 unknown = set(hoi_all) - {axis_tag}
                 if unknown:
                     problems.append(f"{name}: HOI along more than one axis {sorted(hoi_all)}")
                     return None
                 hoi = hoi_all.get(axis_tag)
-                if hoi and "rc" in hoi and center is None:
-                    lower_center = _path_center(lower_path)
-                    upper_center = _path_center(upper_path)
-                    center = _lerp(lower_center, upper_center, 0.5)
                 p0 = (float(lower_node.position.x), float(lower_node.position.y))
                 p1 = (float(upper_node.position.x), float(upper_node.position.y))
                 try:
+                    if hoi and not isinstance(hoi, Mapping):
+                        raise TypeError("not a mapping of HOI parameters")
+                    if hoi and center is None and _is_auto(hoi.get("rc")):
+                        lower_center = _path_center(lower_path)
+                        upper_center = _path_center(upper_path)
+                        center = _lerp(lower_center, upper_center, 0.5)
                     cubic = node_cubic(p0, p1, hoi, center)
-                except (ValueError, TypeError) as error:
+                except (ValueError, TypeError, KeyError) as error:
                     problems.append(f"{name}: unreadable HOI {hoi!r}: {error}")
                     return None
                 node_cubics.append(cubic)
@@ -631,6 +658,11 @@ def _synthesize_layer(column: _Column, t: float, master_id: str, coordinates: li
     layer.layerId = str(uuid.uuid4()).upper()
     layer.associatedMasterId = master_id
     layer.name = "{" + ", ".join(str(v) for v in coordinates) + "}"
+    # everything else the source says about the layer (e.g. a colour palette
+    # index) stays; only where it sits is new
+    for key, value in (getattr(lower, "attributes", None) or {}).items():
+        if key != "coordinates":
+            layer.attributes[key] = copy.deepcopy(value)
     layer.attributes["coordinates"] = list(coordinates)
     # whole units, as Glyphs exports them; a fractional advance also costs
     # fontTools' CFF width optimiser seconds per source
@@ -645,11 +677,22 @@ def _synthesize_layer(column: _Column, t: float, master_id: str, coordinates: li
         if hasattr(lower_shape, "nodes"):
             path = type(lower_shape)()
             path.closed = lower_shape.closed
+            attributes = getattr(lower_shape, "attributes", None)
+            if attributes:
+                path.attributes = copy.deepcopy(attributes)
             cubics = column.cubics[path_index]
             path_index += 1
             for node, cubic in zip(lower_shape.nodes, cubics, strict=True):
                 x, y = cubic_point(cubic, t)
-                path.nodes.append(type(node)((x, y), type=node.type, smooth=node.smooth))
+                new_node = type(node)((x, y), type=node.type, smooth=node.smooth)
+                data = {
+                    k: copy.deepcopy(v)
+                    for k, v in (getattr(node, "_userData", None) or {}).items()
+                    if k != HOI_KEY
+                }
+                if data:
+                    new_node._userData = data
+                path.nodes.append(new_node)
             layer.shapes.append(path)
         else:
             layer.shapes.append(_interpolated_component(lower_shape, upper_shape, t))
@@ -678,10 +721,10 @@ def _interpolated_component(lower: Any, upper: Any, t: float) -> Any:
     b = list(upper.transform)
     transform = type(lower.transform)(*(va + (vb - va) * t for va, vb in zip(a, b, strict=True)))
     component = type(lower)(lower.componentName, transform=transform)
-    for attribute in ("anchor", "alignment", "locked"):
+    for attribute in ("anchor", "alignment", "locked", "attributes"):
         value = getattr(lower, attribute, None)
         if value is not None:
-            setattr(component, attribute, value)
+            setattr(component, attribute, copy.deepcopy(value))
     low: dict[str, Any] = dict(getattr(lower, "smartComponentValues", None) or {})
     up: dict[str, Any] = dict(getattr(upper, "smartComponentValues", None) or {})
     if low or up:
@@ -714,8 +757,9 @@ def bake_hoi(
     :param font: A glyphsLib GSFont, modified in place.
     :param tolerance: The largest distance, in font units, the baked outline
         may stray from the curve between two synthesized layers.
-    :param max_intermediate: The most layers one column may need; a glyph that
-        needs more is refused.
+    :param max_intermediate: The most layers the error-driven halving may add
+        to one column, on top of those at instance and extra locations; a
+        glyph that needs more is refused.
     :param extra_locations: Axis values (design coordinates) that must be
         exact besides the font's instances, e.g. custom static styles.
     :raises HOIError: The HOI cannot be baked faithfully; the message names
@@ -726,6 +770,9 @@ def bake_hoi(
     if not found:
         return result
 
+    unreadable = sorted(name for name, tags in found.items() if UNREADABLE_AXIS in tags)
+    if unreadable:
+        raise HOIError(f"unreadable higher-order interpolation (HOI) on {unreadable}")
     tags = set().union(*found.values())
     if len(tags) != 1:
         raise HOIError(f"HOI along more than one axis: {sorted(tags)}")
@@ -766,7 +813,7 @@ def bake_hoi(
             "higher-order interpolation (HOI) that cannot be baked: " + "; ".join(problems)
         )
 
-    origin = _origin_master_id(font)
+    nearest = _NearestMaster(font, master_locations)
     existing = _existing_brace_layers(font, master_locations, axis_count)
     locations: set[float] = set()
     # built first and added at the end, so that a failure leaves the font as it was
@@ -783,7 +830,7 @@ def bake_hoi(
                 if location in existing:
                     master_id, coordinates = existing[location]
                 else:
-                    master_id = origin
+                    master_id = nearest(location)
                     coordinates = [_canonical(v) for v in location]
                     existing[location] = (master_id, coordinates)
                 pending.append((glyph, _synthesize_layer(column, t, master_id, coordinates)))
@@ -814,15 +861,30 @@ def _is_exported_static(instance: Any) -> bool:
     return bool(getattr(instance, "exports", True))
 
 
-def _origin_master_id(font: GSFont) -> str:
-    """The variable font origin, without importing the sibling module, so this
-    file can move to glyphsLib on its own."""
-    origin = font.customParameters.get("Variable Font Origin")
-    if origin:
-        return str(origin)
-    legacy = font.customParameters.get("Variation Font Origin")
-    if legacy:
-        for master in font.masters:
-            if master.name == legacy:
-                return str(master.id)
-    return str(font.masters[0].id)
+class _NearestMaster:
+    """The master a new location's layers are associated with.
+
+    glyphsLib reads more than the location from that master: smart component
+    parts and corner components are taken from it, so a layer in the Black
+    column must not hang off the Thin master. The nearest master (axes scaled
+    to their ranges, ties to the first) is one per location, so every glyph's
+    layer there joins the same designspace source.
+    """
+
+    def __init__(self, font: GSFont, master_locations: dict[str, tuple[float, ...]]) -> None:
+        self.masters = [(str(m.id), master_locations[str(m.id)]) for m in font.masters]
+        count = len(self.masters[0][1]) if self.masters else 0
+        self.spans = [
+            (max(loc[i] for _, loc in self.masters) - min(loc[i] for _, loc in self.masters))
+            or 1.0
+            for i in range(count)
+        ]
+
+    def __call__(self, location: tuple[float, ...]) -> str:
+        def distance(master_location: tuple[float, ...]) -> float:
+            return sum(
+                ((a - b) / span) ** 2
+                for a, b, span in zip(location, master_location, self.spans, strict=False)
+            )
+
+        return min(self.masters, key=lambda item: distance(item[1]))[0]
