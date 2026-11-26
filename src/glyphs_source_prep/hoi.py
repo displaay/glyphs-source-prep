@@ -719,7 +719,11 @@ def _synthesize_layer(column: _Column, t: float, master_id: str, coordinates: li
 def _interpolated_component(lower: Any, upper: Any, t: float) -> Any:
     a = list(lower.transform)
     b = list(upper.transform)
-    transform = type(lower.transform)(*(va + (vb - va) * t for va, vb in zip(a, b, strict=True)))
+    blended = tuple(va + (vb - va) * t for va, vb in zip(a, b, strict=True))
+    # glyphsLib < 6.17 has a Transform class taking six arguments, newer
+    # versions keep a plain tuple
+    kind = type(lower.transform)
+    transform = blended if kind is tuple else kind(*blended)
     component = type(lower)(lower.componentName, transform=transform)
     for attribute in ("anchor", "alignment", "locked", "attributes"):
         value = getattr(lower, attribute, None)
